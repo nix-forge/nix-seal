@@ -5,7 +5,9 @@ use age::{Decryptor, Encryptor, Identity, NoCallbacks, Recipient, secrecy::Expos
 use secrecy::{ExposeSecretMut, SecretBox};
 use std::{
     collections::BTreeSet,
-    env, fs,
+    env,
+    ffi::OsStr,
+    fs,
     io::{BufRead, BufReader, Cursor, Read, Write},
     path::Path,
     process::{Child, Command, Stdio},
@@ -774,6 +776,14 @@ fn write_plugin_request<W: Write, R: Read>(
 fn plugin_binary_directories(
     operation: &PluginOperation<'_>,
 ) -> Result<std::ffi::OsString, CryptoError> {
+    let path = env::var_os("PATH").ok_or(CryptoError::Plugin)?;
+    plugin_binary_directories_from_path(operation, &path)
+}
+
+fn plugin_binary_directories_from_path(
+    operation: &PluginOperation<'_>,
+    path: &OsStr,
+) -> Result<std::ffi::OsString, CryptoError> {
     let mut names = BTreeSet::new();
     for recipient in operation.recipients() {
         if let Ok(parsed) = recipient.parse::<age::plugin::Recipient>() {
@@ -791,12 +801,11 @@ fn plugin_binary_directories(
     if names.is_empty() {
         return Err(CryptoError::Plugin);
     }
-    let path = env::var_os("PATH").ok_or(CryptoError::Plugin)?;
     let mut directories = BTreeSet::new();
     for name in names {
         let binary = format!("age-plugin-{name}");
         let mut found = None;
-        for directory in env::split_paths(&path) {
+        for directory in env::split_paths(path) {
             let candidate = directory.join(&binary);
             let Ok(canonical) = candidate.canonicalize() else {
                 continue;
@@ -804,7 +813,10 @@ fn plugin_binary_directories(
             let Ok(metadata) = fs::metadata(&canonical) else {
                 continue;
             };
-            if metadata.is_file() && is_executable(&metadata) {
+            if metadata.is_file()
+                && is_executable(&metadata)
+                && canonical.starts_with(Path::new("/nix/store"))
+            {
                 found = canonical.parent().map(Path::to_owned);
                 break;
             }
@@ -819,7 +831,6 @@ fn copy_plugin_environment(command: &mut Command) {
         "DBUS_SESSION_BUS_ADDRESS",
         "DISPLAY",
         "HOME",
-        "SSH_AUTH_SOCK",
         "WAYLAND_DISPLAY",
         "XDG_RUNTIME_DIR",
     ];
@@ -827,9 +838,7 @@ fn copy_plugin_environment(command: &mut Command) {
         let Some(value) = env::var_os(key) else {
             continue;
         };
-        if (*key == "HOME" || *key == "SSH_AUTH_SOCK" || *key == "XDG_RUNTIME_DIR")
-            && !Path::new(&value).is_absolute()
-        {
+        if (*key == "HOME" || *key == "XDG_RUNTIME_DIR") && !Path::new(&value).is_absolute() {
             continue;
         }
         command.env(key, value);
@@ -1054,6 +1063,31 @@ body\n\
                 Vec::new(),
                 std::slice::from_ref(&recipient)
             ),
+            Err(CryptoError::Plugin)
+        ));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_discovery_rejects_executables_outside_the_nix_store() -> Result<(), CryptoError> {
+        let temporary = tempfile::tempdir().map_err(|_| CryptoError::Plugin)?;
+        let plugin = temporary.path().join("age-plugin-nixseal-test-untrusted");
+        std::fs::write(&plugin, b"#!/bin/sh\nexit 0\n").map_err(|_| CryptoError::Plugin)?;
+        std::fs::set_permissions(&plugin, std::fs::Permissions::from_mode(0o700))
+            .map_err(|_| CryptoError::Plugin)?;
+        let recipient = bech32::encode_lower::<bech32::Bech32>(
+            bech32::Hrp::parse("age1nixseal-test-untrusted").map_err(|_| CryptoError::Recipient)?,
+            &[],
+        )
+        .map_err(|_| CryptoError::Recipient)?;
+        let operation = PluginOperation::Encrypt {
+            identity: None,
+            recipients: std::slice::from_ref(&recipient),
+        };
+
+        assert!(matches!(
+            plugin_binary_directories_from_path(&operation, temporary.path().as_os_str()),
             Err(CryptoError::Plugin)
         ));
         Ok(())

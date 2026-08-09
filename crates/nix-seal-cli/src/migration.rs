@@ -444,7 +444,8 @@ pub(super) fn migrate_sops_document(
         return Ok(());
     }
 
-    let source = resolve_migration_regular_file(repository_root, source)?;
+    let source_display = source.to_owned();
+    let source = open_migration_regular_file(repository_root, source)?;
     let sops = resolve_external_executable(sops)?;
     let sops_age_key_file = sops_age_key_file
         .map(|path| {
@@ -463,8 +464,7 @@ pub(super) fn migrate_sops_document(
     let mut command = ProcessCommand::new(sops);
     command
         .arg("--decrypt")
-        .arg(&source)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .env_clear();
@@ -475,6 +475,12 @@ pub(super) fn migrate_sops_document(
     let mut child = command
         .spawn()
         .context("could not start the explicit SOPS migration executable")?;
+    let stdin = child
+        .stdin
+        .take()
+        .context("SOPS migration stdin was unavailable")?;
+    let source_writer = Arc::new(Mutex::new(Some(pipe_migration_source(source, stdin))));
+    let writer_for_completion = Arc::clone(&source_writer);
     let stdout = child
         .stdout
         .take()
@@ -499,12 +505,17 @@ pub(super) fn migrate_sops_document(
         recipients,
         &identity,
         mode,
-        || wait_for_external_migration(&child, EXTERNAL_MIGRATION_TIMEOUT),
+        || {
+            wait_for_external_migration(&child, EXTERNAL_MIGRATION_TIMEOUT)?;
+            wait_for_migration_source(&writer_for_completion)
+                .map_err(|_| nix_seal_authoring::AuthoringError::ExternalInput)
+        },
     );
     let _ = complete_tx.send(());
     let _ = watchdog.join();
     if result.is_err() {
         terminate_external_migration(&child);
+        let _ = wait_for_migration_source(&source_writer);
     }
     let result = result?;
     if json {
@@ -513,7 +524,7 @@ pub(super) fn migrate_sops_document(
             serde_json::json!({
                 "schema":"nix-seal.migration-sops.v1",
                 "dryRun":false,
-                "source":source,
+                "source":source_display,
                 "destination":result.path,
                 "ciphertextHash":result.ciphertext_hash,
                 "plaintextBytes":result.plaintext_bytes,
@@ -523,7 +534,7 @@ pub(super) fn migrate_sops_document(
     } else {
         println!(
             "SOPS document migrated {} -> {}",
-            source.display(),
+            source_display.display(),
             result.path.display()
         );
     }
@@ -572,7 +583,8 @@ pub(super) fn migrate_pgp_document(
         return Ok(());
     }
 
-    let source = resolve_migration_regular_file(repository_root, source)?;
+    let source_display = source.to_owned();
+    let source = open_migration_regular_file(repository_root, source)?;
     let gpg = resolve_external_executable(gpg)?;
     let gnupg_home = resolve_private_gnupg_home(gnupg_home)?;
     let identity = read_identity(identity_path)?;
@@ -582,11 +594,17 @@ pub(super) fn migrate_pgp_document(
         nix_seal_authoring::WriteMode::Create
     };
 
-    let mut command = pgp_decrypt_command(&gpg, &gnupg_home, &source);
+    let mut command = pgp_decrypt_command(&gpg, &gnupg_home);
     isolate_child_process_group(&mut command);
     let mut child = command
         .spawn()
         .context("could not start the explicit GnuPG migration executable")?;
+    let stdin = child
+        .stdin
+        .take()
+        .context("GnuPG migration stdin was unavailable")?;
+    let source_writer = Arc::new(Mutex::new(Some(pipe_migration_source(source, stdin))));
+    let writer_for_completion = Arc::clone(&source_writer);
     let stdout = child
         .stdout
         .take()
@@ -611,12 +629,17 @@ pub(super) fn migrate_pgp_document(
         recipients,
         &identity,
         mode,
-        || wait_for_external_migration(&child, EXTERNAL_MIGRATION_TIMEOUT),
+        || {
+            wait_for_external_migration(&child, EXTERNAL_MIGRATION_TIMEOUT)?;
+            wait_for_migration_source(&writer_for_completion)
+                .map_err(|_| nix_seal_authoring::AuthoringError::ExternalInput)
+        },
     );
     let _ = complete_tx.send(());
     let _ = watchdog.join();
     if result.is_err() {
         terminate_external_migration(&child);
+        let _ = wait_for_migration_source(&source_writer);
     }
     let result = result?;
     if json {
@@ -625,7 +648,7 @@ pub(super) fn migrate_pgp_document(
             serde_json::json!({
                 "schema":"nix-seal.migration-pgp.v1",
                 "dryRun":false,
-                "source":source,
+                "source":source_display,
                 "destination":result.path,
                 "ciphertextHash":result.ciphertext_hash,
                 "plaintextBytes":result.plaintext_bytes,
@@ -634,14 +657,14 @@ pub(super) fn migrate_pgp_document(
     } else {
         println!(
             "PGP document migrated {} -> {}",
-            source.display(),
+            source_display.display(),
             result.path.display()
         );
     }
     Ok(())
 }
 
-pub(super) fn pgp_decrypt_command(gpg: &Path, gnupg_home: &Path, source: &Path) -> ProcessCommand {
+pub(super) fn pgp_decrypt_command(gpg: &Path, gnupg_home: &Path) -> ProcessCommand {
     let mut command = ProcessCommand::new(gpg);
     command
         .arg("--no-options")
@@ -652,8 +675,7 @@ pub(super) fn pgp_decrypt_command(gpg: &Path, gnupg_home: &Path, source: &Path) 
         .arg("--no-auto-key-import")
         .arg("--no-auto-key-retrieve")
         .arg("--decrypt")
-        .arg(source)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .env_clear()
@@ -823,6 +845,112 @@ pub(super) fn normalize_migration_recipients(recipients: &[String]) -> Result<Ve
         }
     }
     Ok(normalized.into_iter().collect())
+}
+
+fn pipe_migration_source(
+    source: fs::File,
+    mut stdin: std::process::ChildStdin,
+) -> thread::JoinHandle<Result<()>> {
+    thread::spawn(move || {
+        std::io::copy(
+            &mut BoundedReader::new(source, EXTERNAL_MIGRATION_MAX_SOURCE_BYTES),
+            &mut stdin,
+        )
+        .context("could not stream the verified migration source to the external decryptor")?;
+        stdin
+            .flush()
+            .context("could not finish streaming the verified migration source")
+    })
+}
+
+fn wait_for_migration_source(
+    source_writer: &Arc<Mutex<Option<thread::JoinHandle<Result<()>>>>>,
+) -> Result<()> {
+    let writer = source_writer
+        .lock()
+        .map_err(|_| anyhow::anyhow!("migration source writer lock was poisoned"))?
+        .take();
+    let Some(writer) = writer else {
+        return Ok(());
+    };
+    writer
+        .join()
+        .map_err(|_| anyhow::anyhow!("migration source writer panicked"))?
+}
+
+/// Opens a legacy migration source exactly once through no-follow directory
+/// descriptors. The returned descriptor remains bound to that source even if
+/// its pathname is replaced while an external decryptor is running.
+#[cfg(unix)]
+pub(super) fn open_migration_regular_file(
+    repository_root: &Path,
+    relative: &Path,
+) -> Result<fs::File> {
+    use rustix::fs::{FileType, Mode, OFlags, fstat, openat};
+
+    if relative.is_absolute()
+        || relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        bail!("migration source must be a non-empty repository-relative normal path");
+    }
+    let root_metadata = fs::symlink_metadata(repository_root)
+        .context("could not inspect migration repository root")?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {
+        bail!("migration repository root must be a non-symlink directory");
+    }
+    let root = repository_root
+        .canonicalize()
+        .context("could not canonicalize migration repository root")?;
+    let mut directory = open_directory_chain_nofollow(&root)
+        .context("could not open migration repository root without following links")?;
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let std::path::Component::Normal(name) = component else {
+            bail!("migration source must be a normal repository-relative path");
+        };
+        if components.peek().is_some() {
+            let descriptor = openat(
+                &directory,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from)?;
+            let metadata = fstat(&descriptor).map_err(std::io::Error::from)?;
+            if FileType::from_raw_mode(metadata.st_mode) != FileType::Directory {
+                bail!("migration source ancestry is not a directory");
+            }
+            directory = fs::File::from(descriptor);
+            continue;
+        }
+        let descriptor = openat(
+            &directory,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?;
+        let metadata = fstat(&descriptor).map_err(std::io::Error::from)?;
+        if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile
+            || metadata.st_nlink != 1
+        {
+            bail!("migration source must be a no-follow single-link regular file");
+        }
+        return Ok(fs::File::from(descriptor));
+    }
+    bail!("migration source must name a regular file")
+}
+
+#[cfg(not(unix))]
+pub(super) fn open_migration_regular_file(
+    repository_root: &Path,
+    relative: &Path,
+) -> Result<fs::File> {
+    let source = resolve_migration_regular_file(repository_root, relative)?;
+    Ok(fs::File::open(source)?)
 }
 
 pub(super) fn resolve_migration_regular_file(
