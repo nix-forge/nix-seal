@@ -37,6 +37,7 @@ use std::{
 use zeroize::{Zeroize, Zeroizing};
 
 const EXTERNAL_MIGRATION_MAX_PLAINTEXT_BYTES: u64 = 64 * 1024 * 1024;
+const EXTERNAL_MIGRATION_MAX_SOURCE_BYTES: u64 = 70 * 1024 * 1024;
 const EXTERNAL_MIGRATION_TIMEOUT: Duration = Duration::from_mins(2);
 #[cfg_attr(any(not(target_os = "linux"), test), allow(dead_code))]
 const GENERATOR_WORKER_MAGIC: &[u8] = b"nix-seal-generator-worker-v1\n";
@@ -7337,6 +7338,25 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn external_migration_uses_the_opened_source_not_a_replaced_path()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path().join("repository");
+        fs::create_dir(&root)?;
+        let source = root.join("legacy.pgp");
+        fs::write(&source, b"reviewed source")?;
+        let mut opened = open_migration_regular_file(&root, Path::new("legacy.pgp"))?;
+
+        fs::rename(&source, root.join("reviewed.pgp"))?;
+        fs::write(&source, b"replacement source")?;
+        let mut actual = Vec::new();
+        opened.read_to_end(&mut actual)?;
+        assert_eq!(actual, b"reviewed source");
+        Ok(())
+    }
+
     #[test]
     fn agenix_rekey_export_accepts_master_to_target_metadata()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -7512,7 +7532,13 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
             .ok_or("sh is absent from PATH")?
             .canonicalize()?;
         let producer = root.join("successful-sops-producer");
-        fs::write(&producer, format!("#!{}\nexit 0\n", shell.display()))?;
+        fs::write(
+            &producer,
+            format!(
+                "#!{}\nwhile IFS= read -r line || [ -n \"$line\" ]; do :; done\n",
+                shell.display()
+            ),
+        )?;
         fs::set_permissions(&producer, fs::Permissions::from_mode(0o700))?;
         migrate_sops_document(
             &root,
@@ -7565,11 +7591,8 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
 
     #[test]
     fn pgp_migration_command_ignores_configuration_and_network_key_lookup() {
-        let command = pgp_decrypt_command(
-            Path::new("/private/bin/gpg"),
-            Path::new("/private/gnupg"),
-            Path::new("/repository/legacy/source.pgp"),
-        );
+        let command =
+            pgp_decrypt_command(Path::new("/private/bin/gpg"), Path::new("/private/gnupg"));
         let arguments = command
             .get_args()
             .map(|argument| argument.to_string_lossy().into_owned())
@@ -7585,7 +7608,6 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
                 "--no-auto-key-import",
                 "--no-auto-key-retrieve",
                 "--decrypt",
-                "/repository/legacy/source.pgp",
             ]
         );
         let environment = command

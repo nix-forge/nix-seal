@@ -26,10 +26,12 @@ descriptors are closed.
 
 The Rust adapter executes standard age plugin recipients and identities through
 the hidden `__plugin-worker` command. The parent resolves each required
-`age-plugin-*` executable to a regular file before launching it, then starts a
-private worker with a cleared environment, a narrow allowlist for hardware and
-agent integration, no inherited standard error, bounded framed input/output, and
-a process-group timeout. The worker uses `NoCallbacks`, so interactive plugin
+`age-plugin-*` executable only from canonical `/nix/store` paths before
+launching it, then starts a private worker with a cleared environment, a narrow
+allowlist for hardware integration, no inherited standard error, bounded framed
+input/output, and a process-group timeout. It never forwards `SSH_AUTH_SOCK` to
+plugins; plugin access to an SSH agent requires a separately designed, explicit
+capability. The worker uses `NoCallbacks`, so interactive plugin
 prompts fail closed rather than blocking or leaking prompt text. Plugin identity
 public values remain opaque: authorization prechecks compare the plugin name,
 while age stanza decryption is the authoritative key proof. Malformed frames,
