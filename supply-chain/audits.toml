@@ -1,6 +1,36 @@
 
 # cargo-vet audits file
 
+[[audits.base64]]
+who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "0.23.0 -> 0.23.1"
+notes = "Reviewed the 0.23.0 to 0.23.1 delta: production code, dependencies, build behavior, and unsafe surface are unchanged; changes only gate SIMD-specific tests correctly on supported architectures and update test metadata."
+
+[[audits.blake3]]
+who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "1.8.5 -> 1.8.6"
+notes = "Reviewed the 1.8.5 to 1.8.6 delta, including the build script and mmap fallback: file length is bounded before the existing unsafe map, mmap failures fall back after rewinding, hashing semantics are unchanged, and no dependency or capability is added."
+
+[[audits.clap]]
+who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "4.6.5 -> 4.6.6"
+notes = "Reviewed the 4.6.5 to 4.6.6 facade delta: runtime library behavior is unchanged; changes are release metadata, documentation, and examples only, with no new dependencies, build script, unsafe code, or runtime capability."
+
+[[audits.clap_builder]]
+who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "4.6.5 -> 4.6.6"
+notes = "Reviewed the 4.6.5 to 4.6.6 delta: it exposes the existing override-usage value through a read-only getter and renames an internal conflicts field without changing parser behavior; no new dependencies, build script, unsafe code, or I/O capability."
+
+[[audits.clap_complete]]
+who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+criteria = "safe-to-deploy"
+delta = "4.6.8 -> 4.6.9"
+notes = "Reviewed the 4.6.8 to 4.6.9 delta: Bash completion generation now consistently uses the existing hyphen-normalized function name, fixing invalid function references; no new dependencies, unsafe code, build behavior, or runtime capability."
+
 [[audits.ed25519]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
