@@ -158,12 +158,15 @@ in
       })
       (lib.mkIf (cfg.activationSpecs ? services) {
         nixSealServices = lib.hm.dag.entryAfter (
-          if cfg.activationSpecs ? activation then
-            [ "nixSeal" ]
-          else if cfg.activationSpecs ? users then
-            [ "nixSealUsers" ]
-          else
-            [ "writeBoundary" ]
+          (
+            if cfg.activationSpecs ? activation then
+              [ "nixSeal" ]
+            else if cfg.activationSpecs ? users then
+              [ "nixSealUsers" ]
+            else
+              [ "writeBoundary" ]
+          )
+          ++ lib.optional pkgs.stdenv.hostPlatform.isDarwin "setupLaunchAgents"
         ) (activate "services" cfg.activationSpecs.services);
       })
     ];
