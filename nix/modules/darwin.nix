@@ -55,7 +55,7 @@ in
     ((import ./shared.nix) {
       inherit self;
       targetKind = "darwin";
-      runtimeDirectory = "/var/run/nix-seal/system";
+      runtimeDirectory = "/private/var/run/nix-seal/system";
       serviceManager = "launchd-system";
       serviceExecutable = "/bin/launchctl";
       supportsServiceCredentials = false;
@@ -71,9 +71,9 @@ in
     };
     root = lib.mkOption {
       type = lib.types.str;
-      default = "/var/run/nix-seal";
+      default = "/private/var/run/nix-seal";
       readOnly = true;
-      description = "Fixed shared Darwin tmpfs mount root.";
+      description = "Fixed shared Darwin tmpfs mount root in macOS's canonical /private/var namespace.";
     };
     size = lib.mkOption {
       type = lib.types.strMatching "[1-9][0-9]*[mMgG]";

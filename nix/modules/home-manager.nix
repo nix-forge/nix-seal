@@ -19,7 +19,9 @@ let
     && (osConfig.nixSeal.enable or false)
     && (osConfig.nixSeal.darwin.volatileRuntime.enable or false);
   linuxRuntimeRoot = "/run/nix-seal/users/${config.home.username}";
-  darwinRuntimeRoot = "/var/run/nix-seal/users/${config.home.username}";
+  # macOS exposes /var as a symlink to /private/var. Keep generated secret
+  # paths symlink-free so consumers using O_NOFOLLOW can validate them.
+  darwinRuntimeRoot = "/private/var/run/nix-seal/users/${config.home.username}";
   cleanupLegacyDarwinRuntime = lib.optionalString integratedDarwinVolatile ''
     ${lib.getExe cfg.package} __darwin-runtime cleanup-persistent \
       --root ${lib.escapeShellArg "${config.home.homeDirectory}/Library/Caches/nix-seal"}

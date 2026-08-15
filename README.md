@@ -48,7 +48,7 @@ should be paired with an administrator-managed volatile runtime when swap
 exposure is unacceptable. `noswap` prevents tmpfs pages from being written to
 swap; it does not override a system's suspend or hibernation policy.
 
-nix-darwin similarly mounts `/var/run/nix-seal` as a size-capped tmpfs with
+nix-darwin similarly mounts `/private/var/run/nix-seal` as a size-capped tmpfs with
 `nosuid`, `nodev`, and `noexec`. Its mount and `users` roots are deliberately
 `0711` so embedded Home Manager users can traverse to their own private `0700`
 directory without being able to list the root contents. Activation rejects a
@@ -282,8 +282,15 @@ nix-seal provision --plan plan.v2.json --target host.example --generation 4 \
   --signing-key /private/release.signing-key --identity /private/admin.agekey
 nix-seal provision --plan plan.v2.json --target host.example --generation 4 \
   --signing-key /private/release.signing-key --identity /private/admin.agekey \
-  --cache-root /var/lib/nix-seal/cache/v1 --execute
+  --install-cache-root /var/lib/nix-seal/cache/v1 --execute
 ```
+
+`--install-cache-root` is the recommended local-host workflow for a
+root-owned system cache. It creates and verifies the artifact as the invoking
+administrator, exports only ciphertext and signed public manifests to a private
+temporary exchange, then uses `sudo` only for the target cache import. It never
+elevates access to an administrator identity or approval signing key. Use
+`--cache-root` only when the invoking user owns the destination cache.
 
 Provisioning never transmits plaintext. Use the explicit ciphertext-only cache
 export/import flow or `nix copy` for a remote build or deployment transport.
@@ -305,6 +312,12 @@ inputs, and the Nix store. A host cache is normally
 nix-seal cache export --destination /tmp/nix-seal-cache-export
 nix-seal cache import --source /tmp/nix-seal-cache-export --root /var/lib/nix-seal/cache/v1
 ```
+
+Import accepts a restrictive ciphertext-only exchange owned by a different
+administrator account. It still rejects symlinks, loose permissions, malformed
+bundle layouts, hash mismatches, and conflicting cache addresses; ownership is
+not a trust boundary for imported ciphertext because every artifact is verified
+again against local policy during activation.
 
 Each target artifact is a directory containing exactly `ciphertext.age` and
 `manifest.dsse.json`. Configure one cache root; Nix does not read the cache

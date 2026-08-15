@@ -134,7 +134,10 @@ does not change the credential used by the service.
    stale, malformed, or unauthenticated object counts. Do not manually copy
    files into the cache.
 3. Recreate artifacts with `nix-seal provision` in dry-run mode, then use
-   `--execute` from a trusted administrator machine. Export with
+   `--execute` from a trusted administrator machine. For a local root-owned
+   host cache, use `--install-cache-root /var/lib/nix-seal/cache/v1`; it keeps
+   the administrator identity unprivileged and elevates only the verified
+   ciphertext-only cache import. For a remote target, export with
    `nix-seal cache export` and import with `nix-seal cache import`; import
    revalidates hashes, signatures, names, permissions, and exact bundle layout.
 4. If a binary cache or transport supplied an artifact, activation remains the

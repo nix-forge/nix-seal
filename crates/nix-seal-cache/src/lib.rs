@@ -217,6 +217,10 @@ pub struct CacheTransferReport {
 /// Versioned ciphertext cache.
 pub struct Cache {
     root: PathBuf,
+    // A mutable cache must be private to its effective user. A cache exchange
+    // is verified before import and may be owned by its producing
+    // administrator, so it is read with the ownership check relaxed.
+    allow_foreign_owner: bool,
 }
 
 impl Cache {
@@ -241,8 +245,11 @@ impl Cache {
             Err(error) => return Err(error.into()),
         }
         set_private_permissions(&root, true)?;
-        validate_private_metadata(&std::fs::symlink_metadata(&root)?, true)?;
-        let cache = Self { root };
+        validate_private_metadata(&std::fs::symlink_metadata(&root)?, true, true)?;
+        let cache = Self {
+            root,
+            allow_foreign_owner: false,
+        };
         cache.recover_transactions()?;
         Ok(cache)
     }
@@ -288,7 +295,7 @@ impl Cache {
             return Err(CacheError::HashMismatch);
         }
         let path = self.root.join("objects").join(digest);
-        let mut file = open_private_regular(&path)?;
+        let mut file = self.open_private_regular(&path)?;
         let bytes = read_bounded(&mut file, MAX_CIPHERTEXT_BYTES)?;
         if Self::digest(&bytes) != digest {
             return Err(CacheError::HashMismatch);
@@ -411,8 +418,11 @@ impl Cache {
     fn open_existing(root: &Path) -> Result<Self, CacheError> {
         let root = normalize_directory_path(root)?;
         let metadata = std::fs::symlink_metadata(&root)?;
-        validate_private_metadata(&metadata, true)?;
-        Ok(Self { root })
+        validate_private_metadata(&metadata, true, false)?;
+        Ok(Self {
+            root,
+            allow_foreign_owner: true,
+        })
     }
 
     fn copy_into(&self, destination: &Cache) -> Result<CacheTransferReport, CacheError> {
@@ -449,10 +459,10 @@ impl Cache {
             }
         }
         for record in self.artifact_records()? {
-            let ciphertext_bytes = file_length(&record.ciphertext_path)?;
+            let ciphertext_bytes = self.file_length(&record.ciphertext_path)?;
             match destination.put_artifact_by_key(
                 record.key.clone(),
-                open_private_regular(&record.ciphertext_path)?,
+                self.open_private_regular(&record.ciphertext_path)?,
                 &record.envelope,
             ) {
                 Ok(imported)
@@ -490,7 +500,7 @@ impl Cache {
         let directory = self.root.join("artifacts").join(&key);
         match std::fs::symlink_metadata(&directory) {
             Ok(metadata) if metadata.file_type().is_dir() => {
-                validate_private_metadata(&metadata, true)?;
+                self.validate_private_metadata(&metadata, true)?;
             }
             Ok(_) => return Err(CacheError::UnsafeMetadata),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -511,7 +521,7 @@ impl Cache {
                 if !is_digest(digest) {
                     return Err(CacheError::UnsafeMetadata);
                 }
-                let mut file = open_private_regular(&entry.path())?;
+                let mut file = self.open_private_regular(&entry.path())?;
                 let bytes = read_bounded(&mut file, MAX_CIPHERTEXT_BYTES)?;
                 if Self::digest(&bytes) != digest {
                     return Err(CacheError::HashMismatch);
@@ -542,7 +552,7 @@ impl Cache {
                     .ok_or(CacheError::Limit)?;
                 inventory.artifact_ciphertext_bytes = inventory
                     .artifact_ciphertext_bytes
-                    .checked_add(file_length(&record.ciphertext_path)?)
+                    .checked_add(self.file_length(&record.ciphertext_path)?)
                     .ok_or(CacheError::Limit)?;
                 inventory.artifact_envelope_bytes = inventory
                     .artifact_envelope_bytes
@@ -603,7 +613,7 @@ impl Cache {
                 if !is_digest(digest) {
                     return Err(CacheError::UnsafeMetadata);
                 }
-                let mut file = open_private_regular(&entry.path())?;
+                let mut file = self.open_private_regular(&entry.path())?;
                 let bytes = read_bounded(&mut file, MAX_CIPHERTEXT_BYTES)?;
                 if Self::digest(&bytes) != digest {
                     return Err(CacheError::HashMismatch);
@@ -641,7 +651,8 @@ impl Cache {
                     return Err(CacheError::UnsafeMetadata);
                 }
                 let record = self.load_artifact_by_key(key)?;
-                let bytes = file_length(&record.ciphertext_path)?
+                let bytes = self
+                    .file_length(&record.ciphertext_path)?
                     .checked_add(
                         u64::try_from(record.envelope.len()).map_err(|_| CacheError::Limit)?,
                     )
@@ -661,7 +672,7 @@ impl Cache {
                         .checked_add(bytes)
                         .ok_or(CacheError::Limit)?;
                     if request.execute {
-                        remove_artifact_bundle(&record)?;
+                        self.remove_artifact_bundle(&record)?;
                     }
                 }
             }
@@ -702,10 +713,10 @@ impl Cache {
                     let path = entry.path();
                     let metadata = std::fs::symlink_metadata(&path)?;
                     if metadata.file_type().is_dir() {
-                        validate_private_metadata(&metadata, true)?;
+                        self.validate_private_metadata(&metadata, true)?;
                         std::fs::remove_dir_all(path)?;
                     } else if metadata.file_type().is_file() {
-                        validate_private_metadata(&metadata, false)?;
+                        self.validate_private_metadata(&metadata, false)?;
                         std::fs::remove_file(path)?;
                     } else {
                         return Err(CacheError::UnsafeMetadata);
@@ -734,7 +745,7 @@ impl Cache {
         }
         let directory = self.root.join("artifacts").join(key);
         let metadata = std::fs::symlink_metadata(&directory)?;
-        validate_private_metadata(&metadata, true)?;
+        self.validate_private_metadata(&metadata, true)?;
         let mut entries = BTreeSet::new();
         for entry in std::fs::read_dir(&directory)? {
             let entry = entry?;
@@ -748,11 +759,11 @@ impl Cache {
         let ciphertext_path = directory.join("ciphertext.age");
         let envelope_path = directory.join("manifest.dsse.json");
         let artifact_ciphertext_hash = copy_and_hash_bounded(
-            open_private_regular(&ciphertext_path)?,
+            self.open_private_regular(&ciphertext_path)?,
             std::io::sink(),
             MAX_CIPHERTEXT_BYTES,
         )?;
-        let mut envelope_file = open_private_regular(&envelope_path)?;
+        let mut envelope_file = self.open_private_regular(&envelope_path)?;
         let envelope = read_bounded(&mut envelope_file, MAX_ENVELOPE_BYTES as u64)?;
         Ok(ArtifactRecord {
             key: key.to_owned(),
@@ -761,6 +772,41 @@ impl Cache {
             ciphertext_path,
             envelope_path,
         })
+    }
+
+    fn validate_private_metadata(
+        &self,
+        metadata: &std::fs::Metadata,
+        directory: bool,
+    ) -> Result<(), CacheError> {
+        validate_private_metadata(metadata, directory, !self.allow_foreign_owner)
+    }
+
+    fn open_private_regular(&self, path: &Path) -> Result<File, CacheError> {
+        open_private_regular(path, !self.allow_foreign_owner)
+    }
+
+    fn file_length(&self, path: &Path) -> Result<u64, CacheError> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        self.validate_private_metadata(&metadata, false)?;
+        Ok(metadata.len())
+    }
+
+    fn remove_artifact_bundle(&self, record: &ArtifactRecord) -> Result<(), CacheError> {
+        let directory = record
+            .ciphertext_path
+            .parent()
+            .ok_or(CacheError::UnsafeMetadata)?;
+        let manifest = directory.join("manifest.dsse.json");
+        self.validate_private_metadata(
+            &std::fs::symlink_metadata(&record.ciphertext_path)?,
+            false,
+        )?;
+        self.validate_private_metadata(&std::fs::symlink_metadata(&manifest)?, false)?;
+        std::fs::remove_file(&record.ciphertext_path)?;
+        std::fs::remove_file(manifest)?;
+        std::fs::remove_dir(directory)?;
+        Ok(())
     }
 }
 
@@ -889,27 +935,6 @@ fn normalize_new_path(path: &Path) -> Result<PathBuf, CacheError> {
     Ok(normalize_directory_path(parent)?.join(name))
 }
 
-fn file_length(path: &Path) -> Result<u64, CacheError> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    validate_private_metadata(&metadata, false)?;
-    Ok(metadata.len())
-}
-
-fn remove_artifact_bundle(record: &ArtifactRecord) -> Result<(), CacheError> {
-    let directory = record
-        .ciphertext_path
-        .parent()
-        .ok_or(CacheError::UnsafeMetadata)?;
-    let manifest = directory.join("manifest.dsse.json");
-    let ciphertext = directory.join("ciphertext.age");
-    validate_private_metadata(&std::fs::symlink_metadata(&ciphertext)?, false)?;
-    validate_private_metadata(&std::fs::symlink_metadata(&manifest)?, false)?;
-    std::fs::remove_file(ciphertext)?;
-    std::fs::remove_file(manifest)?;
-    std::fs::remove_dir(directory)?;
-    Ok(())
-}
-
 fn read_bounded<R: Read>(reader: R, limit: u64) -> Result<Vec<u8>, CacheError> {
     // Do not trust a metadata length observed before the read: a concurrent
     // writer can grow a file after that check. The `Take` adapter keeps both
@@ -951,7 +976,7 @@ fn open_directory_nofollow(path: &Path) -> Result<File, CacheError> {
 }
 
 #[cfg(unix)]
-fn open_private_regular(path: &Path) -> Result<File, CacheError> {
+fn open_private_regular(path: &Path, require_owner: bool) -> Result<File, CacheError> {
     use rustix::fs::{FileType, Mode, OFlags, fstat, open};
     let descriptor = open(
         path,
@@ -962,7 +987,7 @@ fn open_private_regular(path: &Path) -> Result<File, CacheError> {
     let metadata = fstat(&descriptor).map_err(std::io::Error::from)?;
     if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile
         || metadata.st_nlink != 1
-        || metadata.st_uid != rustix::process::geteuid().as_raw()
+        || (require_owner && metadata.st_uid != rustix::process::geteuid().as_raw())
         || metadata.st_mode & 0o077 != 0
     {
         return Err(CacheError::UnsafeMetadata);
@@ -971,7 +996,7 @@ fn open_private_regular(path: &Path) -> Result<File, CacheError> {
 }
 
 #[cfg(not(unix))]
-fn open_private_regular(path: &Path) -> Result<File, CacheError> {
+fn open_private_regular(path: &Path, _require_owner: bool) -> Result<File, CacheError> {
     let metadata = std::fs::symlink_metadata(path)?;
     if !metadata.file_type().is_file() {
         return Err(CacheError::UnsafeMetadata);
@@ -1027,7 +1052,7 @@ fn ensure_private_directory(path: &Path) -> Result<(), CacheError> {
         Err(error) => return Err(error.into()),
     }
     set_private_permissions(path, true)?;
-    validate_private_metadata(&std::fs::symlink_metadata(path)?, true)
+    validate_private_metadata(&std::fs::symlink_metadata(path)?, true, true)
 }
 
 #[cfg(unix)]
@@ -1109,6 +1134,7 @@ fn is_digest(value: &str) -> bool {
 fn validate_private_metadata(
     metadata: &std::fs::Metadata,
     directory: bool,
+    require_owner: bool,
 ) -> Result<(), CacheError> {
     if metadata.file_type().is_dir() != directory || metadata.file_type().is_file() == directory {
         return Err(CacheError::UnsafeMetadata);
@@ -1116,7 +1142,7 @@ fn validate_private_metadata(
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if metadata.uid() != rustix::process::geteuid().as_raw()
+        if (require_owner && metadata.uid() != rustix::process::geteuid().as_raw())
             || metadata.mode() & 0o077 != 0
             || (!directory && metadata.nlink() != 1)
         {

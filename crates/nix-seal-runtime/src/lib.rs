@@ -2129,19 +2129,27 @@ fn open_directory_chain_nofollow(path: &Path) -> Result<File, RuntimeError> {
             }
             return Err(RuntimeError::UnsafeSource);
         };
-        let descriptor = openat(
-            &directory,
-            name,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(|error| {
-            if matches!(error, rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR) {
-                RuntimeError::UnsafeSource
-            } else {
-                RuntimeError::Io(error.into())
-            }
-        })?;
+        // nix-seal's Darwin tmpfs root is intentionally traversal-only
+        // (0711): users may reach their own private generation, but cannot
+        // enumerate other users or phases.  O_SEARCH preserves descriptor-
+        // bound, no-follow traversal without incorrectly requiring directory
+        // read permission on those shared ancestors.
+        #[cfg(target_os = "macos")]
+        // rustix does not expose Darwin's O_SEARCH yet. The Darwin SDK defines
+        // it as O_EXEC (0x40000000) | O_DIRECTORY (0x00100000).
+        let directory_flags =
+            OFlags::from_bits_retain(0x4010_0000) | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        #[cfg(not(target_os = "macos"))]
+        let directory_flags =
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let descriptor =
+            openat(&directory, name, directory_flags, Mode::empty()).map_err(|error| {
+                if matches!(error, rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR) {
+                    RuntimeError::UnsafeSource
+                } else {
+                    RuntimeError::Io(error.into())
+                }
+            })?;
         let metadata = fstat(&descriptor).map_err(|error| RuntimeError::Io(error.into()))?;
         if FileType::from_raw_mode(metadata.st_mode) != FileType::Directory {
             return Err(RuntimeError::UnsafeSource);
@@ -2347,19 +2355,24 @@ fn set_file_owner_accepts_existing_unprivileged_owner() -> Result<(), Box<dyn st
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 #[test]
-fn open_regular_nofollow_handles_execute_only_ancestor() -> Result<(), Box<dyn std::error::Error>> {
+fn open_regular_nofollow_handles_search_only_shared_ancestor()
+-> Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::fs::PermissionsExt;
 
     let temporary = tempfile::tempdir()?;
-    let directory = temporary.path().join("private");
+    let shared = temporary.path().join("shared");
+    std::fs::create_dir(&shared)?;
+    let directory = shared.join("private");
     std::fs::create_dir(&directory)?;
     let file = directory.join("secret");
     std::fs::File::create(&file)?;
-    std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o711))?;
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o111))?;
 
-    let opened = open_regular_nofollow(&file)?;
+    let result = open_regular_nofollow(&file);
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o700))?;
+    let opened = result?;
     assert_eq!(opened.metadata()?.len(), 0);
 
     Ok(())

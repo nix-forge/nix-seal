@@ -499,8 +499,13 @@ struct ProvisionArgs {
     #[arg(long)]
     expires_at: Option<u64>,
     /// Override the standard XDG cache root.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "install_cache_root")]
     cache_root: Option<PathBuf>,
+    /// Install through a ciphertext-only cache exchange at this target-local
+    /// cache root. The administrator identity is read before privilege
+    /// elevation; when needed, only `cache import` is run through `sudo`.
+    #[arg(long, conflicts_with = "cache_root")]
+    install_cache_root: Option<PathBuf>,
     /// Perform cache writes. Without this flag, validate and print a public
     /// target-wide provisioning plan without changing state.
     #[arg(long)]
@@ -616,7 +621,7 @@ enum DarwinRuntimeCommand {
     /// Mount and prepare the root-owned Darwin tmpfs runtime hierarchy.
     Prepare {
         /// The fixed shared mount root managed by nix-seal.
-        #[arg(long, default_value = "/var/run/nix-seal")]
+        #[arg(long, default_value = "/private/var/run/nix-seal")]
         root: PathBuf,
         /// Maximum total tmpfs capacity, such as 256m.
         #[arg(long, default_value = "256m")]
@@ -627,7 +632,7 @@ enum DarwinRuntimeCommand {
     },
     /// Prepare the Darwin tmpfs and activate one authenticated system phase.
     Activate {
-        #[arg(long, default_value = "/var/run/nix-seal")]
+        #[arg(long, default_value = "/private/var/run/nix-seal")]
         root: PathBuf,
         #[arg(long, default_value = "256m")]
         size: String,
@@ -2324,7 +2329,20 @@ fn run_provision(arguments: ProvisionArgs, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let root = arguments.cache_root.unwrap_or_else(default_cache_root);
+    let install_cache_root = arguments.install_cache_root;
+    let staging = install_cache_root
+        .as_ref()
+        .map(|_| tempfile::tempdir())
+        .transpose()?;
+    let root = staging.as_ref().map_or_else(
+        || {
+            arguments
+                .cache_root
+                .clone()
+                .unwrap_or_else(default_cache_root)
+        },
+        |directory| directory.path().join("cache"),
+    );
     let cache = nix_seal_cache::Cache::open(root)?;
     let mut artifacts = Vec::with_capacity(prepared.len());
     for (secret, secret_policy, _, _) in prepared {
@@ -2344,6 +2362,15 @@ fn run_provision(arguments: ProvisionArgs, json: bool) -> Result<()> {
         )?;
         artifacts.push((secret, delivery, result));
     }
+    if let Some(destination) = &install_cache_root {
+        let exchange = staging
+            .as_ref()
+            .context("cache-install staging directory was not created")?
+            .path()
+            .join("exchange");
+        cache.export_to(&exchange)?;
+        install_cache_exchange(&exchange, destination)?;
+    }
     if json {
         println!(
             "{}",
@@ -2353,6 +2380,7 @@ fn run_provision(arguments: ProvisionArgs, json: bool) -> Result<()> {
                 "target":arguments.target,
                 "planHash":policy.plan_hash,
                 "generation":arguments.generation,
+                "installedCacheRoot":install_cache_root,
                 "artifacts":artifacts.iter().map(|(secret, delivery, result)| serde_json::json!({
                     "secretId":secret,
                     "delivery":delivery,
@@ -2375,7 +2403,48 @@ fn run_provision(arguments: ProvisionArgs, json: bool) -> Result<()> {
         for (secret, delivery, result) in &artifacts {
             println!("{}\t{}\t{}", secret, delivery, result.cache_key);
         }
+        if let Some(destination) = &install_cache_root {
+            println!(
+                "installed verified ciphertext-only cache exchange into {}",
+                destination.display()
+            );
+        }
     }
+    Ok(())
+}
+
+/// Imports a verified, ciphertext-only exchange without ever elevating access
+/// to an administrator identity or signing key. A root-owned host cache is the
+/// common case; the interactive `sudo` call is deliberately confined to the
+/// cache-import subcommand.
+fn install_cache_exchange(source: &Path, destination: &Path) -> Result<()> {
+    #[cfg(unix)]
+    if rustix::process::geteuid().as_raw() != 0 {
+        let program = std::env::current_exe()
+            .context("could not resolve nix-seal executable for privileged cache import")?;
+        let status = ProcessCommand::new("sudo")
+            .arg("--")
+            .arg(program)
+            .arg("cache")
+            .arg("import")
+            .arg("--source")
+            .arg(source)
+            .arg("--root")
+            .arg(destination)
+            // The parent command owns the structured output. Leave sudo and
+            // nix-seal diagnostics visible, but avoid emitting a second JSON
+            // document when the caller selected `--json`.
+            .stdout(Stdio::null())
+            .status()
+            .context("could not start sudo for ciphertext-only cache import")?;
+        if !status.success() {
+            bail!("privileged ciphertext-only cache import failed with {status}");
+        }
+        return Ok(());
+    }
+
+    let cache = nix_seal_cache::Cache::open(destination)?;
+    cache.import_from(source)?;
     Ok(())
 }
 
@@ -7089,6 +7158,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
                 signing_key: signing_path.clone(),
                 expires_at: None,
                 cache_root: Some(cache_root.clone()),
+                install_cache_root: None,
                 execute: false,
             },
             false,
@@ -7118,6 +7188,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
                 signing_key: signing_path,
                 expires_at: None,
                 cache_root: Some(cache_root.clone()),
+                install_cache_root: None,
                 execute: true,
             },
             false,
