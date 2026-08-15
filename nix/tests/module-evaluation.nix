@@ -137,6 +137,10 @@ let
             public = "age1x2k2hx0rzltg56p4et3yn4a873m6jltk62vmlrs8leamel69kamqf8ycqx";
           };
           secrets."nix-access-tokens" = { };
+          secrets."service-token" = {
+            phase = "services";
+            source = "secrets/alice/users/tester/nix-access-tokens.age";
+          };
         };
       }
     ];
@@ -238,6 +242,13 @@ in
       standaloneHomeConfiguration.config.nixSeal.secrets."nix-access-tokens".source
       == "secrets/alice/users/tester/nix-access-tokens.age";
     pkgs.runCommand "nix-seal-derived-home-target" { } "touch $out";
+  home-service-activation-order =
+    assert builtins.elem "nixSeal"
+      standaloneHomeConfiguration.config.home.activation.nixSealServices.after;
+    assert
+      builtins.elem "setupLaunchAgents" standaloneHomeConfiguration.config.home.activation.nixSealServices.after
+      == pkgs.stdenv.hostPlatform.isDarwin;
+    pkgs.runCommand "nix-seal-home-service-activation-order" { } "touch $out";
   explicit-scope-overrides =
     assert overrideConfiguration.config.nixSeal.targetId == "host/custom";
     assert overrideConfiguration.config.nixSeal.secretScope == "systems/custom";
