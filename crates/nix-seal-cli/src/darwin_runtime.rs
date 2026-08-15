@@ -14,7 +14,12 @@ use std::{
 };
 
 #[cfg(target_os = "macos")]
-const ROOT: &str = "/var/run/nix-seal";
+// `/var` is a symlink to `/private/var` on macOS.  Use the canonical namespace
+// because downstream consumers deliberately traverse secret paths with
+// `O_NOFOLLOW`; publishing a `/var/...` runtime path would make those consumers
+// reject an otherwise valid generation before reaching nix-seal's controlled
+// `current` link.
+const ROOT: &str = "/private/var/run/nix-seal";
 #[cfg(target_os = "macos")]
 const MOUNT_FLAGS: &str = "nosuid,nodev,noexec";
 #[cfg(target_os = "macos")]
@@ -241,9 +246,11 @@ pub(crate) fn prepare(_root: &Path, _users: &[String], _size: &str) -> Result<Pa
 
 #[cfg(target_os = "macos")]
 fn mount_root(root: &Path) -> Result<PathBuf> {
-    let canonical = root
-        .canonicalize()
-        .context("could not canonicalize Darwin volatile runtime root")?;
+    // Phase-specific roots such as `users/<name>/services` are created by the
+    // activation transaction after this preflight. Resolve their nearest
+    // existing ancestor so a missing, approved leaf does not look like a
+    // missing tmpfs mount.
+    let canonical = canonical_existing_ancestor(root)?;
     let mut current = PathBuf::from("/");
     let mut mounted = None;
     for component in canonical.components() {
@@ -255,6 +262,24 @@ fn mount_root(root: &Path) -> Result<PathBuf> {
         }
     }
     mounted.context("Darwin volatile tmpfs mount is missing")
+}
+
+#[cfg(target_os = "macos")]
+fn canonical_existing_ancestor(path: &Path) -> Result<PathBuf> {
+    let mut current = path;
+    loop {
+        match current.canonicalize() {
+            Ok(canonical) => return Ok(canonical),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                current = current
+                    .parent()
+                    .context("could not find an existing Darwin volatile runtime ancestor")?;
+            }
+            Err(error) => {
+                return Err(error).context("could not canonicalize Darwin volatile runtime root");
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -405,6 +430,8 @@ fn parse_dscl_ids(output: &str) -> Option<(u32, u32)> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    use super::canonical_existing_ancestor;
     use super::{parse_dscl_ids, valid_size, valid_username};
 
     #[test]
@@ -432,5 +459,20 @@ mod tests {
         assert!(!valid_size("15m"));
         assert!(!valid_size("4097m"));
         assert!(!valid_size("256"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolves_a_missing_phase_root_through_its_existing_ancestor()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let existing = temporary.path().join("users").join("ianmh");
+        std::fs::create_dir_all(&existing)?;
+        let missing = existing.join("services");
+        assert_eq!(
+            canonical_existing_ancestor(&missing)?,
+            existing.canonicalize()?
+        );
+        Ok(())
     }
 }
