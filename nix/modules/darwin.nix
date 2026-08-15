@@ -107,32 +107,22 @@ in
         message = "nixSeal users-phase templates must be owned by root:root until macOS accounts exist";
       }
     ];
-    system.activationScripts = lib.mkMerge [
-      (lib.mkIf cfg.darwin.volatileRuntime.enable {
-        nixSealRuntime = {
-          deps = [ "specialfs" ];
-          text = prepare;
-        };
-      })
-      (lib.mkIf (cfg.activationSpecs ? users) {
-        nixSealUsers = {
-          deps = lib.optional cfg.darwin.volatileRuntime.enable "nixSealRuntime";
-          text = activate cfg.activationSpecs.users;
-        };
-      })
-      (lib.mkIf (cfg.activationSpecs ? activation) {
-        nixSeal = {
-          deps = lib.optional cfg.darwin.volatileRuntime.enable "nixSealRuntime";
-          text = activate cfg.activationSpecs.activation;
-        };
-      })
-      (lib.mkIf (cfg.activationSpecs ? services) {
-        nixSealServices = {
-          deps = lib.optional cfg.darwin.volatileRuntime.enable "nixSealRuntime";
-          text = activate cfg.activationSpecs.services;
-        };
-      })
-    ];
+    # nix-darwin activation snippets have a fixed phase order and do not
+    # support NixOS-style `deps`. Prepare the mount before any activation,
+    # materialize normal system state in the main activation phase, and run
+    # service work after Home Manager has installed its user-level state.
+    system.activationScripts = {
+      preActivation.text = lib.mkAfter (lib.optionalString cfg.darwin.volatileRuntime.enable prepare);
+      extraActivation.text = lib.mkAfter (
+        lib.concatStringsSep "\n" (
+          lib.optional (cfg.activationSpecs ? users) (activate cfg.activationSpecs.users)
+          ++ lib.optional (cfg.activationSpecs ? activation) (activate cfg.activationSpecs.activation)
+        )
+      );
+      postActivation.text = lib.mkAfter (
+        lib.optionalString (cfg.activationSpecs ? services) (activate cfg.activationSpecs.services)
+      );
+    };
     launchd.daemons =
       lib.optionalAttrs cfg.darwin.volatileRuntime.enable {
         nix-seal-runtime.serviceConfig = {
