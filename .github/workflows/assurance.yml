@@ -12,10 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      # The repository's stable rust-toolchain file otherwise overrides the
-      # nightly toolchain installed below.
-      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -25,15 +21,15 @@ jobs:
           toolchain: nightly
           components: miri, rust-src
       - name: Run Miri on the memory-safe core
-        run: cargo miri test -p nix-seal-core --lib
+        # The checked-in rust-toolchain.toml pins stable. Select nightly on
+        # the command itself so Rustup cannot override this job's toolchain.
+        run: cargo +nightly miri test -p nix-seal-core --lib
   address-sanitizer:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
-      # Both the sanitizer flags and -Zbuild-std require nightly. The
-      # repository's stable rust-toolchain file otherwise takes precedence.
-      RUSTUP_TOOLCHAIN: nightly
+      # Both the sanitizer flags and -Zbuild-std require nightly.
       RUSTFLAGS: -Zsanitizer=address
       RUSTDOCFLAGS: -Zsanitizer=address
     steps:
@@ -45,7 +41,8 @@ jobs:
           toolchain: nightly
           components: rust-src
       - name: Run address sanitizer on the parser core
-        run: cargo test -p nix-seal-core --lib -Zbuild-std --target x86_64-unknown-linux-gnu
+        # The explicit toolchain bypasses the stable repository pin.
+        run: cargo +nightly test -p nix-seal-core --lib -Zbuild-std --target x86_64-unknown-linux-gnu
   mutation:
     runs-on: ubuntu-latest
     timeout-minutes: 60
