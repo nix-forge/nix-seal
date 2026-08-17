@@ -185,6 +185,10 @@ criteria = "safe-to-deploy"
 version = "4.6.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.clap_complete_nushell]]
+version = "4.6.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.clap_derive]]
 version = "4.6.4"
 criteria = "safe-to-deploy"
@@ -847,12 +851,20 @@ criteria = "safe-to-deploy"
 version = "2.0.19"
 criteria = "safe-to-deploy"
 
+[[exemptions.thiserror]]
+version = "2.0.20"
+criteria = "safe-to-deploy"
+
 [[exemptions.thiserror-impl]]
 version = "1.0.69"
 criteria = "safe-to-deploy"
 
 [[exemptions.thiserror-impl]]
 version = "2.0.19"
+criteria = "safe-to-deploy"
+
+[[exemptions.thiserror-impl]]
+version = "2.0.20"
 criteria = "safe-to-deploy"
 
 [[exemptions.tinystr]]
@@ -980,6 +992,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.yaml_serde]]
 version = "0.10.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.yaml_serde]]
+version = "0.10.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.zerocopy]]
