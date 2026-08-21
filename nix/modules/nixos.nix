@@ -1,5 +1,10 @@
 self:
-{ config, lib, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   cfg = config.nixSeal;
   embeddedHomeManagerUsers =
@@ -21,6 +26,11 @@ let
       user
     ]) embeddedHomeManagerUsers;
   prepare = lib.escapeShellArgs (runtimeArguments "prepare");
+  mountRuntime = ''
+    if [ "''${DRY_ACTIVATE:-0}" != 1 ]; then
+      ${pkgs.util-linux}/bin/mount -- ${lib.escapeShellArg cfg.linux.volatileRuntime.root}
+    fi
+  '';
   runtimeDeps = lib.optional cfg.linux.volatileRuntime.enable "nixSealRuntime";
   bootPhases = [
     "users"
@@ -160,8 +170,17 @@ in
     system.activationScripts = lib.mkMerge [
       (lib.mkIf cfg.linux.volatileRuntime.enable {
         nixSealRuntime = {
-          deps = [ "specialfs" ];
-          text = prepare;
+          # Custom fileSystems mounts are normally started by systemd after
+          # switch activation. Mount this fixed, declarative tmpfs before
+          # validating or writing any nix-seal runtime state.
+          deps = [
+            "etc"
+            "specialfs"
+          ];
+          text = ''
+            ${mountRuntime}
+            ${prepare}
+          '';
         };
       })
       (lib.mkIf (cfg.activationSpecs ? users) {
@@ -193,6 +212,7 @@ in
         Type = "oneshot";
         RemainAfterExit = true;
         UMask = "0077";
+        RequiresMountsFor = cfg.linux.volatileRuntime.root;
         ExecStart = prepare;
       };
     };
