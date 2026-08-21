@@ -43,10 +43,12 @@ with `noswap`, `nosuid`, `nodev`, and `noexec`. System generations live below
 `/run/nix-seal/users/<username>` subtree. Activation verifies the mount type and
 flags from `/proc/self/mountinfo` before decrypting and fails closed if the
 expected mount is absent or changed. Standalone Home Manager cannot create a
-root-owned mount, so it uses its session's `$XDG_RUNTIME_DIR/nix-seal` and
-should be paired with an administrator-managed volatile runtime when swap
-exposure is unacceptable. `noswap` prevents tmpfs pages from being written to
-swap; it does not override a system's suspend or hibernation policy.
+root-owned mount, so it uses its session's `$XDG_RUNTIME_DIR/nix-seal`, requires
+that variable at activation, and emits a warning that this path does not by
+itself prove a memory-backed `noswap` filesystem. Pair standalone Home Manager
+with an administrator-managed volatile runtime when swap exposure is
+unacceptable. `noswap` prevents tmpfs pages from being written to swap; it does
+not override a system's suspend or hibernation policy.
 
 nix-darwin similarly mounts `/private/var/run/nix-seal` as a size-capped tmpfs with
 `nosuid`, `nodev`, and `noexec`. Its mount and `users` roots are deliberately

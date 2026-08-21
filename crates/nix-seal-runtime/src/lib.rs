@@ -2129,17 +2129,20 @@ fn open_directory_chain_nofollow(path: &Path) -> Result<File, RuntimeError> {
             }
             return Err(RuntimeError::UnsafeSource);
         };
-        // nix-seal's Darwin tmpfs root is intentionally traversal-only
+        // nix-seal's volatile runtime root is intentionally traversal-only
         // (0711): users may reach their own private generation, but cannot
-        // enumerate other users or phases.  O_SEARCH preserves descriptor-
-        // bound, no-follow traversal without incorrectly requiring directory
-        // read permission on those shared ancestors.
+        // enumerate other users or phases. Use a descriptor-only search open
+        // when the platform provides one, so no-follow traversal does not
+        // incorrectly require directory read permission on shared ancestors.
         #[cfg(target_os = "macos")]
         // rustix does not expose Darwin's O_SEARCH yet. The Darwin SDK defines
         // it as O_EXEC (0x40000000) | O_DIRECTORY (0x00100000).
         let directory_flags =
             OFlags::from_bits_retain(0x4010_0000) | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        #[cfg(target_os = "linux")]
+        let directory_flags = OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_os = "linux"))]
         let directory_flags =
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         let descriptor =
