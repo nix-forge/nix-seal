@@ -216,7 +216,16 @@ in
       )
     );
     warnings =
-      lib.optional (pkgs.stdenv.hostPlatform.isDarwin && !integratedDarwinVolatile)
-        "Home Manager stores runtime plaintext under ~/Library/Caches/nix-seal on macOS; this location is not guaranteed memory-backed";
+      lib.optional (pkgs.stdenv.hostPlatform.isDarwin && !integratedDarwinVolatile) (
+        "nix-seal standalone Home Manager target for ${config.home.username} on macOS stores runtime plaintext "
+        + "under ~/Library/Caches/nix-seal; this location is not guaranteed memory-backed. "
+        + "Home Manager embedded in nix-darwin can instead use the nix-darwin-managed volatile runtime."
+      )
+      ++ lib.optional (pkgs.stdenv.hostPlatform.isLinux && !integratedLinuxVolatile) (
+        "nix-seal standalone Home Manager target for ${config.home.username} on Linux stores runtime plaintext "
+        + "under $XDG_RUNTIME_DIR/nix-seal. The directory is required and runtime permissions are validated, "
+        + "but standalone Home Manager cannot guarantee that it is a noswap memory-backed filesystem. "
+        + "Home Manager embedded in NixOS can instead use the NixOS-managed noswap tmpfs."
+      );
   };
 }

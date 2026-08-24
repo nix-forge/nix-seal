@@ -5,6 +5,7 @@
   pkgs,
 }:
 let
+  lib = inputs.nixpkgs.lib;
   targetId = "host/test";
   secretId = "service/token";
   source = "nix-seal.example.toml";
@@ -241,6 +242,12 @@ in
     assert
       standaloneHomeConfiguration.config.nixSeal.secrets."nix-access-tokens".source
       == "secrets/alice/users/tester/nix-access-tokens.age";
+    assert
+      lib.any (
+        warning:
+        lib.hasInfix "standalone Home Manager target for tester on Linux" warning
+        && lib.hasInfix "$XDG_RUNTIME_DIR/nix-seal" warning
+      ) standaloneHomeConfiguration.config.warnings == pkgs.stdenv.hostPlatform.isLinux;
     pkgs.runCommand "nix-seal-derived-home-target" { } "touch $out";
   home-service-activation-order =
     assert builtins.elem "nixSeal"
