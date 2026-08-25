@@ -208,11 +208,11 @@ in
       wantedBy = [ "multi-user.target" ];
       before = [ "nix-seal-activate.service" ];
       after = [ "local-fs.target" ];
+      unitConfig.RequiresMountsFor = cfg.linux.volatileRuntime.root;
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
         UMask = "0077";
-        RequiresMountsFor = cfg.linux.volatileRuntime.root;
         ExecStart = prepare;
       };
     };
@@ -223,11 +223,11 @@ in
       after = [ "local-fs.target" ];
       requires = lib.optional cfg.linux.volatileRuntime.enable "nix-seal-runtime.service";
       wants = lib.optional cfg.linux.volatileRuntime.enable "nix-seal-runtime.service";
+      unitConfig.RequiresMountsFor = lib.optional cfg.linux.volatileRuntime.enable cfg.linux.volatileRuntime.root;
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
         UMask = "0077";
-        RequiresMountsFor = lib.optional cfg.linux.volatileRuntime.enable cfg.linux.volatileRuntime.root;
         ExecStart = bootActivationCommands;
       };
     };
