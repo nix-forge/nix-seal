@@ -6,12 +6,13 @@ let
     system:
     let
       pkgs = inputs.nixpkgs.legacyPackages.${system};
+      src = lib.cleanSource ../.;
     in
     pkgs.rustPlatform.buildRustPackage {
       pname = "nix-seal";
       version = "0.1.0-alpha.1";
-      src = lib.cleanSource ../.;
-      cargoLock.lockFile = ../Cargo.lock;
+      inherit src;
+      cargoLock.lockFile = "${src}/Cargo.lock";
       buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libiconv ];
       nativeCheckInputs = [
         pkgs.age
