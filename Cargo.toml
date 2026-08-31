@@ -26,7 +26,7 @@ age = { version = "=0.12.1", default-features = false, features = [
   "plugin",
   "ssh",
 ] }
-argon2 = { version = "=0.5.3", default-features = false, features = [
+argon2 = { version = "=0.6.0", default-features = false, features = [
   "alloc",
   "password-hash",
 ] }
