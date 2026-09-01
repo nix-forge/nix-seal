@@ -5140,14 +5140,11 @@ fn run_delegated_issue(arguments: &DelegatedIssueArgs, json: bool) -> Result<()>
     if json {
         println!(
             "{}",
-            serde_json::json!({"schema":"nix-seal.output.v1","operation":"delegated-capability-issued","secretId":arguments.secret,"capability":arguments.output,"expiresAt":expires_at})
+            serde_json::json!({"schema":"nix-seal.output.v1","operation":"delegated-capability-issued","capability":arguments.output,"expiresAt":expires_at})
         );
     } else {
         println!("{}", arguments.output.display());
-        eprintln!(
-            "issued a create-only capability for {} that expires at {expires_at}",
-            arguments.secret
-        );
+        eprintln!("issued a create-only capability that expires at {expires_at}");
     }
     Ok(())
 }
@@ -5204,13 +5201,12 @@ fn run_delegated_create(arguments: &DelegatedCreateArgs, json: bool) -> Result<(
     if json {
         println!(
             "{}",
-            serde_json::json!({"schema":"nix-seal.output.v1","operation":"delegated-secret-created","secretId":capability.secret_id,"ciphertextPath":result.path,"ciphertextHash":result.ciphertext_hash,"recipientCount":recipients.len()})
+            serde_json::json!({"schema":"nix-seal.output.v1","operation":"delegated-secret-created","ciphertextHash":result.ciphertext_hash,"recipientCount":recipients.len()})
         );
     } else {
-        println!("{}", result.path.display());
+        println!("ciphertext created");
         eprintln!(
-            "created canonical ciphertext for {}; mark the Nix declaration pending = false before activation",
-            capability.secret_id
+            "created canonical ciphertext; mark the Nix declaration pending = false before activation"
         );
     }
     Ok(())

@@ -243,6 +243,12 @@ fn delegated_create_is_bound_to_one_pending_secret_and_cannot_replace_it()
         "capability issue failed: {}",
         String::from_utf8_lossy(&issue.stderr)
     );
+    assert!(
+        !issue
+            .stderr
+            .windows(11)
+            .any(|window| window == b"db/password")
+    );
     assert_eq!(
         std::fs::metadata(&capability_path)?.permissions().mode() & 0o777,
         0o600
@@ -265,6 +271,10 @@ fn delegated_create_is_bound_to_one_pending_secret_and_cannot_replace_it()
         "delegated create failed: {}",
         String::from_utf8_lossy(&created.stderr)
     );
+    for output in [&created.stdout, &created.stderr] {
+        assert!(!output.windows(11).any(|window| window == b"db/password"));
+        assert!(!output.windows(14).any(|window| window == b"secrets/db.age"));
+    }
     let replay = run_with_stdin(&fixture.root, &create_arguments, plaintext)?;
     assert!(!replay.status.success());
     assert!(fixture.root.join("secrets/db.age").is_file());
