@@ -15,6 +15,7 @@ updates:
       include: scope
     groups:
       cargo-minor-patch:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -30,6 +31,7 @@ updates:
       include: scope
     groups:
       github-actions-minor-patch:
+        patterns: ["*"]
   - package-ecosystem: nix
     directory: "/"
     schedule:
@@ -45,6 +47,7 @@ updates:
       include: scope
     groups:
       nix-inputs-minor-patch:
+        patterns: ["*"]
   - package-ecosystem: nix
     directory: "/flake/dev"
     schedule:
@@ -60,3 +63,4 @@ updates:
       include: scope
     groups:
       nix-dev-inputs-minor-patch:
+        patterns: ["*"]
