@@ -11,7 +11,7 @@ mod migration;
 use migration::*;
 
 use anyhow::{Context, Result, bail};
-use argon2::{Algorithm, Argon2, Params, PasswordHasher, Version, password_hash::SaltString};
+use argon2::{Algorithm, Argon2, Params, PasswordHasher, Version};
 use base64::{
     Engine as _,
     engine::general_purpose::{
@@ -4092,11 +4092,9 @@ fn generate_argon2id_password_hash(
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let salt_bytes = nix_seal_crypto::random_bytes(16)?;
     let salt_encoded = BASE64_STANDARD_NO_PAD.encode(salt_bytes.expose_secret());
-    let salt = SaltString::from_b64(&salt_encoded)
-        .map_err(|_| anyhow::anyhow!("could not encode Argon2id salt"))?;
     let encoded = Zeroizing::new(
         argon2
-            .hash_password(prompts[0].expose_secret(), &salt)
+            .hash_password_with_salt(prompts[0].expose_secret(), salt_encoded.as_bytes())
             .map_err(|_| anyhow::anyhow!("Argon2id password hashing failed"))?
             .to_string(),
     );
@@ -6470,7 +6468,7 @@ fn completions(shell: CompletionShell) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use argon2::{PasswordVerifier, password_hash::PasswordHash};
+    use argon2::{PasswordVerifier, password_hash::phc::PasswordHash};
     use nix_seal_manifest::{ARTIFACT_SCHEMA, TargetManifestV2};
     use std::collections::BTreeMap;
 
