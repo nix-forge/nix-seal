@@ -1,22 +1,6 @@
-# NixOS' Python test driver injects `machine` and `start_all` at execution
-# time; the narrow suppressions below model that execution environment.
-from collections.abc import Callable
-from typing import Protocol
-
-
-class Machine(Protocol):
-    def wait_for_unit(self, unit: str) -> None: ...
-
-    def succeed(self, command: str) -> str: ...
-
-
-# The annotation-only declarations document the driver contract without
-# rebinding the injected values when this script is executed.
-machine: Machine
-start_all: Callable[[], None]
-
-
-# The NixOS test driver injects these names into the script's globals.
+# The NixOS test driver injects and type-checks these names as its own concrete
+# `QemuMachine` implementation. Do not redeclare them with a local Protocol:
+# current nixpkgs rejects a declaration that conflicts with that inferred type.
 start_all()
 machine.wait_for_unit("multi-user.target")
 
