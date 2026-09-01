@@ -1,9 +1,4 @@
-# Security-sensitive ownership; expand to multiple independent reviewers as the
-# maintainer team grows.
-* @IanHollow
-/crates/nix-seal-crypto/ @IanHollow
-/crates/nix-seal-runtime/ @IanHollow
-/crates/nix-seal-cache/ @IanHollow
-/docs/adr/ @IanHollow
-/THREAT_MODEL.md @IanHollow
-/SECURITY.md @IanHollow
+# This repository has one maintainer and no required code-owner reviews.
+# Leave paths unassigned so automated dependency PRs do not request a review
+# that cannot add an independent approval. Add a maintainer team here when one
+# exists and require code-owner review in the branch rule at the same time.
