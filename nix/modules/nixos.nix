@@ -31,6 +31,15 @@ let
       ${pkgs.util-linux}/bin/mount -- ${lib.escapeShellArg cfg.linux.volatileRuntime.root}
     fi
   '';
+  runtimeActivation = pkgs.replaceVarsWith {
+    name = "nix-seal-runtime-activation";
+    src = ./scripts/runtime-activation.sh;
+    isExecutable = true;
+    replacements = {
+      bash = lib.getExe pkgs.bash;
+      inherit mountRuntime prepare;
+    };
+  };
   runtimeDeps = lib.optional cfg.linux.volatileRuntime.enable "nixSealRuntime";
   bootPhases = [
     "users"
@@ -177,10 +186,7 @@ in
             "etc"
             "specialfs"
           ];
-          text = ''
-            ${mountRuntime}
-            ${prepare}
-          '';
+          text = "${runtimeActivation}";
         };
       })
       (lib.mkIf (cfg.activationSpecs ? users) {

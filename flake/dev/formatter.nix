@@ -32,6 +32,7 @@
 
     shfmt.enable = true;
     shellcheck.enable = true;
+    rustfmt.enable = true;
     taplo.enable = true;
     rumdl-check.enable = true;
     typos = {

@@ -14,6 +14,7 @@ let
           "target"
           "recovery"
           "signer"
+          "authorizer"
           "plugin"
         ];
         description = "Role of this public identity in plan.v2.";
@@ -48,7 +49,7 @@ let
       identities = lib.mkOption {
         type = lib.types.attrsOf identityType;
         default = { };
-        description = "Public administrator, recovery, signer, and plugin identities.";
+        description = "Public administrator, recovery, signer, authorizer, and plugin identities.";
       };
       groups = lib.mkOption {
         type = lib.types.attrsOf groupType;

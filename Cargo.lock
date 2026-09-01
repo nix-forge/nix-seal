@@ -1344,6 +1344,7 @@ dependencies = [
  "clap_complete_nushell",
  "ed25519-dalek 3.0.0",
  "fs2",
+ "getrandom 0.4.3",
  "jiff",
  "nix-seal-authoring",
  "nix-seal-cache",

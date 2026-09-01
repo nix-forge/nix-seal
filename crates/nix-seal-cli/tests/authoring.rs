@@ -6,6 +6,9 @@ use nix_seal_core::{
     Secret, TargetSelectors,
 };
 use secrecy::ExposeSecret;
+use sha2::Digest;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     collections::BTreeMap,
     fs::File,
@@ -188,6 +191,171 @@ fn plan_directed_delete_is_explicit_and_recoverable() -> Result<(), Box<dyn std:
         ],
     )?;
     assert!(!deep_check.status.success());
+    Ok(())
+}
+
+#[cfg(unix)]
+fn bootstrap_fixture() -> Result<(Fixture, PathBuf, PathBuf), Box<dyn std::error::Error>> {
+    let fixture = fixture()?;
+    let mut bootstrap: PlanV2 = serde_json::from_slice(&std::fs::read(&fixture.plan_path)?)?;
+    "nix-seal.bootstrap-create-plan.v1".clone_into(&mut bootstrap.schema);
+    let authorizer = nix_seal_manifest::ApprovalSigningKey::generate()?;
+    bootstrap.identities.insert(
+        Id::parse("bootstrap-authorizer")?,
+        Identity {
+            kind: IdentityKind::Authorizer,
+            public: authorizer.encode_public()?,
+        },
+    );
+    let bootstrap_path = fixture.root.join("bootstrap-create-plan.json");
+    std::fs::write(&bootstrap_path, serde_json::to_vec(&bootstrap)?)?;
+    let authorizer_path = fixture.root.join("authorizer.key");
+    write_private(&authorizer_path, authorizer.encode_private()?.as_bytes())?;
+    Ok((fixture, bootstrap_path, authorizer_path))
+}
+
+#[cfg(unix)]
+#[test]
+fn bootstrap_complete_creates_once_without_exposing_secret_metadata()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (fixture, bootstrap_path, authorizer_path) = bootstrap_fixture()?;
+    let plaintext = b"delegated-bootstrap-canary";
+    let untrusted_authorizer = nix_seal_manifest::ApprovalSigningKey::generate()?;
+    let untrusted_authorizer_path = fixture.root.join("untrusted-authorizer.key");
+    write_private(
+        &untrusted_authorizer_path,
+        untrusted_authorizer.encode_private()?.as_bytes(),
+    )?;
+    let denied = run_with_stdin(
+        &fixture.root,
+        &[
+            "secret",
+            "bootstrap",
+            "complete",
+            "--bootstrap-plan",
+            path_text(&bootstrap_path)?,
+            "--secret",
+            "db/password",
+            "--authorizer-key",
+            path_text(&untrusted_authorizer_path)?,
+            "--repository-root",
+            path_text(&fixture.root)?,
+        ],
+        plaintext,
+    )?;
+    assert!(!denied.status.success());
+    assert!(!fixture.root.join("secrets/db.age").exists());
+    let create_arguments = [
+        "secret",
+        "bootstrap",
+        "complete",
+        "--bootstrap-plan",
+        path_text(&bootstrap_path)?,
+        "--secret",
+        "db/password",
+        "--authorizer-key",
+        path_text(&authorizer_path)?,
+        "--repository-root",
+        path_text(&fixture.root)?,
+    ];
+    let created = run_with_stdin(&fixture.root, &create_arguments, plaintext)?;
+    assert!(
+        created.status.success(),
+        "bootstrap completion failed: {}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    for output in [&created.stdout, &created.stderr] {
+        assert!(!output.windows(11).any(|window| window == b"db/password"));
+        assert!(!output.windows(14).any(|window| window == b"secrets/db.age"));
+    }
+    let replay = run_with_stdin(&fixture.root, &create_arguments, plaintext)?;
+    assert!(!replay.status.success());
+    assert!(fixture.root.join("secrets/db.age").is_file());
+
+    let revealed = run(
+        &fixture.root,
+        &reveal_args(&fixture.plan_path, &fixture.root, &fixture.identity_path)?,
+    )?;
+    assert_eq!(revealed.stdout, plaintext);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn delegated_create_is_bound_to_one_bootstrap_secret_and_cannot_replace_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (fixture, bootstrap_path, authorizer_path) = bootstrap_fixture()?;
+
+    let plaintext = b"delegated-bootstrap-canary";
+    let digest = sha2::Sha256::digest(plaintext);
+    let commitment = format!("{:x}", base16ct::HexDisplay(digest.as_slice()));
+    let capability_path = fixture.root.join("delegated-capability.json");
+    let issue = run(
+        &fixture.root,
+        &[
+            "secret",
+            "delegate",
+            "issue",
+            "--bootstrap-plan",
+            path_text(&bootstrap_path)?,
+            "--secret",
+            "db/password",
+            "--authorizer-key",
+            path_text(&authorizer_path)?,
+            "--plaintext-sha256",
+            &commitment,
+            "--plaintext-bytes",
+            "26",
+            "--output",
+            path_text(&capability_path)?,
+        ],
+    )?;
+    assert!(
+        issue.status.success(),
+        "capability issue failed: {}",
+        String::from_utf8_lossy(&issue.stderr)
+    );
+    assert!(
+        !issue
+            .stderr
+            .windows(11)
+            .any(|window| window == b"db/password")
+    );
+    assert_eq!(
+        std::fs::metadata(&capability_path)?.permissions().mode() & 0o777,
+        0o600
+    );
+
+    let create_arguments = [
+        "secret",
+        "delegate",
+        "create",
+        "--bootstrap-plan",
+        path_text(&bootstrap_path)?,
+        "--capability",
+        path_text(&capability_path)?,
+        "--repository-root",
+        path_text(&fixture.root)?,
+    ];
+    let created = run_with_stdin(&fixture.root, &create_arguments, plaintext)?;
+    assert!(
+        created.status.success(),
+        "delegated create failed: {}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    for output in [&created.stdout, &created.stderr] {
+        assert!(!output.windows(11).any(|window| window == b"db/password"));
+        assert!(!output.windows(14).any(|window| window == b"secrets/db.age"));
+    }
+    let replay = run_with_stdin(&fixture.root, &create_arguments, plaintext)?;
+    assert!(!replay.status.success());
+    assert!(fixture.root.join("secrets/db.age").is_file());
+
+    let revealed = run(
+        &fixture.root,
+        &reveal_args(&fixture.plan_path, &fixture.root, &fixture.identity_path)?,
+    )?;
+    assert_eq!(revealed.stdout, plaintext);
     Ok(())
 }
 

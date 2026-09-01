@@ -1,5 +1,19 @@
 # Security and recovery runbooks
 
+## First-time canonical ciphertext creation
+
+The module derives bootstrap state from the declared ciphertext source: an
+absent source appears only in the create-only bootstrap plan, and a present
+source appears in the normal plan. Keep the authorizer private key outside the
+repository and Nix store, then pipe the value to `nix-seal secret bootstrap
+complete`. The command verifies the bootstrap plan and authorizer, derives the
+recipient set from the plan, and atomically creates only an absent ciphertext.
+Re-evaluate the normal plan before provisioning.
+
+Use `secret delegate issue` and `secret delegate create` only when the
+authorizer and creator must be separate actors. Do not reuse a capability after
+an error. Delegated creation never replaces existing ciphertext.
+
 These procedures assume a reviewed `plan.v2.json`, a protected administrator
 workstation, and private identities stored outside the Nix store. Commands that
 can mutate state are shown first in their dry-run form. Never put a secret

@@ -135,6 +135,9 @@ in
     })
   ];
   config = lib.mkIf cfg.enable {
+    # Keep the public, non-decrypting authoring commands available to the
+    # profile owner. Private identities remain explicit out-of-store paths.
+    home.packages = [ cfg.package ];
     assertions = [
       {
         assertion =

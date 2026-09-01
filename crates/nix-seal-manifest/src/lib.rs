@@ -1,7 +1,10 @@
 #![forbid(unsafe_code)]
 //! Strict target manifests and DSSE-style Ed25519 approval envelopes.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use nix_seal_core::Id;
 use serde::{Deserialize, Serialize};
@@ -34,6 +37,11 @@ const AGENT_REQUEST_SIGN: u8 = 13;
 const AGENT_FAILURE: u8 = 5;
 const AGENT_SIGN_RESPONSE: u8 = 14;
 const SSH_SIGNATURE_NAMESPACE: &str = "nix-seal-artifact-v2";
+const DELEGATED_CAPABILITY_PAYLOAD_TYPE: &str =
+    "application/vnd.nix-seal.delegated-create-capability.v1+json";
+const DELEGATED_CAPABILITY_SSH_NAMESPACE: &str = "nix-seal-delegated-create-capability-v1";
+/// Exact delegated create-capability schema accepted by this implementation.
+pub const DELEGATED_CREATE_CAPABILITY_SCHEMA: &str = "nix-seal.delegated-create-capability.v1";
 
 /// Public metadata cryptographically bound to one target ciphertext.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -104,6 +112,51 @@ pub struct SignedEnvelopeV1 {
     /// Base64-encoded RFC 8785 canonical manifest JSON.
     pub payload: String,
     /// Distinct approval signatures.
+    pub signatures: Vec<EnvelopeSignature>,
+}
+
+/// A narrow, short-lived authorization to create exactly one previously
+/// pending canonical ciphertext. It is not an artifact approval and cannot be
+/// used to replace, decrypt, rekey, provision, or activate a secret.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DelegatedCreateCapabilityV1 {
+    /// Versioned capability schema.
+    pub schema: String,
+    /// Fixed create-only operation.
+    pub operation: String,
+    /// Random 256-bit, base64url-encoded capability nonce.
+    pub capability_id: String,
+    /// BLAKE3 hash of the bound bootstrap plan.
+    pub bootstrap_plan_hash: String,
+    /// Only secret which this capability can create.
+    pub secret_id: Id,
+    /// Repository-relative canonical ciphertext destination.
+    pub source: String,
+    /// BLAKE3 hash of the sorted public encryption-recipient set.
+    pub recipient_set_hash: String,
+    /// SHA-256 commitment to the plaintext supplied at creation.
+    pub plaintext_sha256: String,
+    /// Maximum permitted plaintext bytes.
+    pub max_plaintext_bytes: u64,
+    /// Unix issue time.
+    pub issued_at: u64,
+    /// Earliest accepted Unix time.
+    pub not_before: u64,
+    /// Exclusive Unix expiry time, no more than fifteen minutes after issue.
+    pub expires_at: u64,
+}
+
+/// Signature envelope for [`DelegatedCreateCapabilityV1`]. Its payload type
+/// and OpenSSH signature namespace are distinct from target artifacts.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SignedDelegatedCreateCapabilityV1 {
+    /// Dedicated DSSE payload type.
+    pub payload_type: String,
+    /// Base64-encoded RFC 8785 canonical capability JSON.
+    pub payload: String,
+    /// Exactly one trusted authorizer signature.
     pub signatures: Vec<EnvelopeSignature>,
 }
 
@@ -238,6 +291,14 @@ impl ApprovalSigningKey {
     }
 
     fn sign(&self, message: &[u8]) -> Result<EnvelopeSignature, ManifestError> {
+        self.sign_with_namespace(message, SSH_SIGNATURE_NAMESPACE)
+    }
+
+    fn sign_with_namespace(
+        &self,
+        message: &[u8],
+        ssh_namespace: &str,
+    ) -> Result<EnvelopeSignature, ManifestError> {
         match self {
             Self::Ed25519(key) => {
                 let signature = key.sign(message);
@@ -249,7 +310,7 @@ impl ApprovalSigningKey {
             }
             Self::SshEd25519(key) => {
                 let signature = key
-                    .sign(SSH_SIGNATURE_NAMESPACE, HashAlg::Sha512, message)
+                    .sign(ssh_namespace, HashAlg::Sha512, message)
                     .map_err(|_| ManifestError::InvalidSignature)?
                     .to_pem(LineEnding::LF)
                     .map_err(|_| ManifestError::InvalidSignature)?;
@@ -264,9 +325,8 @@ impl ApprovalSigningKey {
             }
             #[cfg(unix)]
             Self::SshAgentEd25519 { public_key, socket } => {
-                let signed_data =
-                    SshSig::signed_data(SSH_SIGNATURE_NAMESPACE, HashAlg::Sha512, message)
-                        .map_err(|_| ManifestError::InvalidSignature)?;
+                let signed_data = SshSig::signed_data(ssh_namespace, HashAlg::Sha512, message)
+                    .map_err(|_| ManifestError::InvalidSignature)?;
                 let key_blob = public_key
                     .to_bytes()
                     .map_err(|_| ManifestError::InvalidSignature)?;
@@ -276,7 +336,7 @@ impl ApprovalSigningKey {
                 }
                 let sshsig = SshSig::new(
                     public_key.key_data().clone(),
-                    SSH_SIGNATURE_NAMESPACE,
+                    ssh_namespace,
                     HashAlg::Sha512,
                     signature,
                 )
@@ -637,6 +697,120 @@ pub fn sign_manifest(
     })
 }
 
+/// Signs one create-only delegation under a separate signature domain.
+pub fn sign_delegated_create_capability(
+    capability: &DelegatedCreateCapabilityV1,
+    key: &ApprovalSigningKey,
+) -> Result<SignedDelegatedCreateCapabilityV1, ManifestError> {
+    validate_delegated_capability(capability)?;
+    let payload = serde_jcs::to_vec(capability).map_err(|_| ManifestError::Json)?;
+    if payload.len() > MAX_PAYLOAD_BYTES {
+        return Err(ManifestError::Limit);
+    }
+    let message = pae(DELEGATED_CAPABILITY_PAYLOAD_TYPE.as_bytes(), &payload)?;
+    Ok(SignedDelegatedCreateCapabilityV1 {
+        payload_type: DELEGATED_CAPABILITY_PAYLOAD_TYPE.to_owned(),
+        payload: STANDARD.encode(payload),
+        signatures: vec![key.sign_with_namespace(&message, DELEGATED_CAPABILITY_SSH_NAMESPACE)?],
+    })
+}
+
+/// Verifies one trusted authorizer signature and returns the strict capability.
+pub fn verify_delegated_create_capability(
+    envelope: &SignedDelegatedCreateCapabilityV1,
+    trusted_keys: &TrustedKeys,
+    now: u64,
+    allowed_clock_skew: u64,
+) -> Result<DelegatedCreateCapabilityV1, ManifestError> {
+    if envelope.payload_type != DELEGATED_CAPABILITY_PAYLOAD_TYPE || envelope.signatures.len() != 1
+    {
+        return Err(ManifestError::Version);
+    }
+    let payload = STANDARD
+        .decode(&envelope.payload)
+        .map_err(|_| ManifestError::Json)?;
+    if payload.len() > MAX_PAYLOAD_BYTES {
+        return Err(ManifestError::Limit);
+    }
+    let capability: DelegatedCreateCapabilityV1 =
+        serde_json::from_slice(&payload).map_err(|_| ManifestError::Json)?;
+    validate_delegated_capability(&capability)?;
+    if serde_jcs::to_vec(&capability).map_err(|_| ManifestError::Json)? != payload {
+        return Err(ManifestError::Json);
+    }
+    let latest_issued = now
+        .checked_add(allowed_clock_skew)
+        .ok_or(ManifestError::Time)?;
+    if capability.issued_at > latest_issued
+        || now < capability.not_before
+        || now >= capability.expires_at
+    {
+        return Err(ManifestError::Time);
+    }
+    let message = pae(envelope.payload_type.as_bytes(), &payload)?;
+    let entry = &envelope.signatures[0];
+    if entry.key_id.is_empty() || entry.signature.len() > MAX_SIGNATURE_BYTES {
+        return Err(ManifestError::Limit);
+    }
+    let key = trusted_keys
+        .0
+        .get(&entry.key_id)
+        .ok_or(ManifestError::UntrustedSigner)?;
+    match (entry.algorithm, key) {
+        (ApprovalSignatureAlgorithm::Ed25519V1, ApprovalVerificationKey::Ed25519(key)) => {
+            let bytes = STANDARD
+                .decode(&entry.signature)
+                .map_err(|_| ManifestError::InvalidSignature)?;
+            let signature =
+                Signature::from_slice(&bytes).map_err(|_| ManifestError::InvalidSignature)?;
+            key.verify_strict(&message, &signature)
+                .map_err(|_| ManifestError::InvalidSignature)?;
+        }
+        (
+            ApprovalSignatureAlgorithm::SshEd25519SshsigV1,
+            ApprovalVerificationKey::SshEd25519(key),
+        ) => {
+            let signature = SshSig::from_pem(entry.signature.as_bytes())
+                .map_err(|_| ManifestError::InvalidSignature)?;
+            if signature.algorithm() != SshAlgorithm::Ed25519 {
+                return Err(ManifestError::InvalidSignature);
+            }
+            key.verify(DELEGATED_CAPABILITY_SSH_NAMESPACE, &message, &signature)
+                .map_err(|_| ManifestError::InvalidSignature)?;
+        }
+        _ => return Err(ManifestError::InvalidSignature),
+    }
+    Ok(capability)
+}
+
+fn validate_delegated_capability(
+    capability: &DelegatedCreateCapabilityV1,
+) -> Result<(), ManifestError> {
+    if capability.schema != DELEGATED_CREATE_CAPABILITY_SCHEMA
+        || capability.operation != "create"
+        || !is_digest(&capability.bootstrap_plan_hash)
+        || !is_digest(&capability.recipient_set_hash)
+        || !is_digest(&capability.plaintext_sha256)
+        || capability.source.is_empty()
+        || capability.source.starts_with('/')
+        || capability.source.contains("..")
+        || capability.source.contains("/./")
+        || capability.max_plaintext_bytes == 0
+        || capability.not_before < capability.issued_at
+        || capability.expires_at <= capability.not_before
+        || capability.expires_at - capability.issued_at > 900
+    {
+        return Err(ManifestError::Binding);
+    }
+    let id = URL_SAFE_NO_PAD
+        .decode(&capability.capability_id)
+        .map_err(|_| ManifestError::Binding)?;
+    if id.len() != 32 {
+        return Err(ManifestError::Binding);
+    }
+    Ok(())
+}
+
 /// Adds one distinct approval signature without changing the payload.
 pub fn add_signature(
     envelope: &mut SignedEnvelopeV1,
@@ -884,6 +1058,24 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
         }
     }
 
+    fn delegated_capability() -> DelegatedCreateCapabilityV1 {
+        DelegatedCreateCapabilityV1 {
+            schema: DELEGATED_CREATE_CAPABILITY_SCHEMA.to_owned(),
+            operation: "create".to_owned(),
+            capability_id: URL_SAFE_NO_PAD.encode([7_u8; 32]),
+            bootstrap_plan_hash: "1".repeat(64),
+            secret_id: Id::parse("admin/users/test/api")
+                .unwrap_or_else(|error| unreachable!("{error}")),
+            source: "secrets/admin/users/test/api.age".to_owned(),
+            recipient_set_hash: "2".repeat(64),
+            plaintext_sha256: "3".repeat(64),
+            max_plaintext_bytes: 64,
+            issued_at: 100,
+            not_before: 100,
+            expires_at: 200,
+        }
+    }
+
     fn trust(keys: &[&ApprovalSigningKey]) -> TrustedKeys {
         let mut trusted = TrustedKeys::new();
         for key in keys {
@@ -941,6 +1133,33 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
             .unwrap_or_else(|error| unreachable!("{error}"));
         assert_eq!(verified.manifest, manifest);
         assert_eq!(verified.signers.len(), 2);
+    }
+
+    #[test]
+    fn delegated_capability_uses_a_separate_signature_domain_and_time_limit() {
+        let key = ApprovalSigningKey::generate().unwrap_or_else(|error| unreachable!("{error}"));
+        let capability = delegated_capability();
+        let envelope = sign_delegated_create_capability(&capability, &key)
+            .unwrap_or_else(|error| unreachable!("{error}"));
+        assert_eq!(
+            verify_delegated_create_capability(&envelope, &trust(&[&key]), 150, 0)
+                .unwrap_or_else(|error| unreachable!("{error}")),
+            capability
+        );
+        assert!(verify_delegated_create_capability(&envelope, &trust(&[&key]), 200, 0).is_err());
+        assert!(
+            verify(
+                &SignedEnvelopeV1 {
+                    payload_type: envelope.payload_type,
+                    payload: envelope.payload,
+                    signatures: envelope.signatures,
+                },
+                &trust(&[&key]),
+                1,
+                &expected(&manifest()),
+            )
+            .is_err()
+        );
     }
 
     #[test]

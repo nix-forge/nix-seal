@@ -22,8 +22,11 @@ fuzz_target!(|input: &[u8]| {
     }
 
     let mut rendered = Vec::new();
-    nix_seal_runtime::render_template_into(input, &placeholders, &mut rendered, |_placeholder, writer| {
-        writer.write_all(b"value").map_err(RuntimeError::Io)
-    })
+    nix_seal_runtime::render_template_into(
+        input,
+        &placeholders,
+        &mut rendered,
+        |_placeholder, writer| writer.write_all(b"value").map_err(RuntimeError::Io),
+    )
     .expect("a validated template must render with every declared placeholder");
 });

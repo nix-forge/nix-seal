@@ -48,6 +48,10 @@ let
             kind = "signer";
             public = "nix-seal-ed25519-v1:bGfuLIxQvDrT8IMpu931WWcILSKDrDmaCJ8oPFyT3X4=";
           };
+          bootstrap-authorizer = {
+            kind = "authorizer";
+            public = "nix-seal-ed25519-v1:hL79NFnL0cYSFuYdO+WRjQSHruyBznn7MGEIVJKMuOE=";
+          };
         };
         approvalPolicies.release = {
           threshold = 1;
@@ -115,6 +119,33 @@ let
       }
     ];
   };
+  bootstrapConfiguration = inputs.nixpkgs.lib.nixosSystem {
+    inherit system;
+    specialArgs = {
+      nixSealCatalog = scopedCatalog;
+      targetName = "fixture";
+    };
+    modules = [
+      self.nixosModules.default
+      {
+        system.stateVersion = "26.05";
+        nixSeal = {
+          enable = true;
+          administrator = "alice";
+          identityFile = "/run/keys/nix-seal-target";
+          artifactCacheRoot = "/var/lib/nix-seal/cache/v1";
+          repositoryRoot = scopedRepositoryRoot;
+          identities.target = {
+            kind = "target";
+            public = "age1x2k2hx0rzltg56p4et3yn4a873m6jltk62vmlrs8leamel69kamqf8ycqx";
+          };
+          secrets."first-token" = {
+            source = "secrets/alice/hosts/nixos/fixture/first-token.age";
+          };
+        };
+      }
+    ];
+  };
   standaloneHomeConfiguration = inputs.home-manager.lib.homeManagerConfiguration {
     inherit pkgs;
     extraSpecialArgs = {
@@ -141,6 +172,12 @@ let
           secrets."service-token" = {
             phase = "services";
             source = "secrets/alice/users/tester/nix-access-tokens.age";
+            serviceCredentials = lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+              {
+                unit = "example.service";
+                name = "service-token";
+              }
+            ];
           };
         };
       }
@@ -233,6 +270,26 @@ in
         ' ${scopedConfiguration.config.nixSeal.planFile} >/dev/null
         touch "$out"
       '';
+  bootstrap-state-is-inferred-from-ciphertext-existence =
+    assert bootstrapConfiguration.config.nixSeal.bootstrapPlanFile != null;
+    pkgs.runCommand "nix-seal-bootstrap-state-is-inferred-from-ciphertext-existence"
+      { nativeBuildInputs = [ pkgs.jq ]; }
+      ''
+        jq -e '
+          (.secrets | length) == 0 and
+          ((.identities | has("alice/bootstrap-authorizer")) | not)
+        ' ${bootstrapConfiguration.config.nixSeal.planFile} >/dev/null
+        jq -e '
+          .schema == "nix-seal.bootstrap-create-plan.v1" and
+          (.identities | has("alice/bootstrap-authorizer")) and
+          (.secrets | keys == ["alice/hosts/nixos/fixture/first-token"]) and
+          .secrets["alice/hosts/nixos/fixture/first-token"].source
+          == "secrets/alice/hosts/nixos/fixture/first-token.age" and
+          .secrets["alice/hosts/nixos/fixture/first-token"].sourceCiphertextHash
+          == "0000000000000000000000000000000000000000000000000000000000000000"
+        ' ${bootstrapConfiguration.config.nixSeal.bootstrapPlanFile} >/dev/null
+        touch "$out"
+      '';
   derived-home-target =
     assert standaloneHomeConfiguration.config.nixSeal.targetId == "home/tester/fixture";
     assert standaloneHomeConfiguration.config.nixSeal.secretScope == "users/tester";
@@ -256,6 +313,15 @@ in
       builtins.elem "setupLaunchAgents" standaloneHomeConfiguration.config.home.activation.nixSealServices.after
       == pkgs.stdenv.hostPlatform.isDarwin;
     pkgs.runCommand "nix-seal-home-service-activation-order" { } "touch $out";
+  service-credential-policy-projection =
+    pkgs.runCommand "nix-seal-service-credential-policy-projection" { nativeBuildInputs = [ pkgs.jq ]; }
+      ''
+        jq -e '
+          .secrets["alice/users/tester/service-token"].runtime.restartUnits
+          == ${if pkgs.stdenv.hostPlatform.isLinux then "[\"example.service\"]" else "[]"}
+        ' ${standaloneHomeConfiguration.config.nixSeal.planFile} >/dev/null
+        touch "$out"
+      '';
   explicit-scope-overrides =
     assert overrideConfiguration.config.nixSeal.targetId == "host/custom";
     assert overrideConfiguration.config.nixSeal.secretScope == "systems/custom";
