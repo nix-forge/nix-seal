@@ -5,3 +5,4 @@
 *.identity
 /.nix-seal/
 /.nix-seal.lock
+.pre-commit-config.yaml

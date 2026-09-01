@@ -390,6 +390,7 @@ enum IdentityRole {
     Target,
     Recovery,
     Signer,
+    Authorizer,
     Plugin,
 }
 
@@ -677,6 +678,50 @@ enum SecretCommand {
     /// Import or edit a logical JSON/TOML/YAML/dotenv collection and atomically
     /// split its mapped fields into independent canonical ciphertext files.
     Batch(CollectionBatchArgs),
+    /// Issue or consume a narrowly scoped, create-only capability for a pending secret.
+    #[command(subcommand)]
+    Delegate(DelegateCommand),
+}
+
+#[derive(Subcommand)]
+enum DelegateCommand {
+    /// Sign a short-lived capability after inspecting a plaintext commitment.
+    Issue(DelegatedIssueArgs),
+    /// Encrypt stdin to public plan recipients after verifying a capability.
+    Create(DelegatedCreateArgs),
+}
+
+#[derive(Args)]
+struct DelegatedIssueArgs {
+    #[arg(long)]
+    bootstrap_plan: PathBuf,
+    #[arg(long)]
+    secret: nix_seal_core::Id,
+    /// Explicit local authorizer signing key; it must not be in the repository or Nix store.
+    #[arg(long)]
+    authorizer_key: PathBuf,
+    /// SHA-256 of the plaintext, supplied as lowercase hexadecimal.
+    #[arg(long)]
+    plaintext_sha256: String,
+    /// Exact plaintext byte count.
+    #[arg(long)]
+    plaintext_bytes: u64,
+    /// Capability lifetime, capped at fifteen minutes.
+    #[arg(long, default_value_t = 300)]
+    expires_in_seconds: u64,
+    /// New output file for the public signed capability.
+    #[arg(long)]
+    output: PathBuf,
+}
+
+#[derive(Args)]
+struct DelegatedCreateArgs {
+    #[arg(long)]
+    bootstrap_plan: PathBuf,
+    #[arg(long)]
+    capability: PathBuf,
+    #[arg(long, default_value = ".")]
+    repository_root: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, ValueEnum)]
@@ -1808,6 +1853,7 @@ fn identity_role_kind(role: IdentityRole) -> nix_seal_core::IdentityKind {
         IdentityRole::Target => nix_seal_core::IdentityKind::Target,
         IdentityRole::Recovery => nix_seal_core::IdentityKind::Recovery,
         IdentityRole::Signer => nix_seal_core::IdentityKind::Signer,
+        IdentityRole::Authorizer => nix_seal_core::IdentityKind::Authorizer,
         IdentityRole::Plugin => nix_seal_core::IdentityKind::Plugin,
     }
 }
@@ -1825,7 +1871,7 @@ fn validate_identity_public(kind: &nix_seal_core::IdentityKind, public: &str) ->
         | nix_seal_core::IdentityKind::Recovery => {
             nix_seal_crypto::normalize_recipient(public)?;
         }
-        nix_seal_core::IdentityKind::Signer => {
+        nix_seal_core::IdentityKind::Signer | nix_seal_core::IdentityKind::Authorizer => {
             let mut trusted = nix_seal_manifest::TrustedKeys::new();
             trusted.insert_encoded(public)?;
         }
@@ -1947,6 +1993,7 @@ fn identity_kind_name(kind: &nix_seal_core::IdentityKind) -> &'static str {
         nix_seal_core::IdentityKind::Target => "target",
         nix_seal_core::IdentityKind::Recovery => "recovery",
         nix_seal_core::IdentityKind::Signer => "signer",
+        nix_seal_core::IdentityKind::Authorizer => "authorizer",
         nix_seal_core::IdentityKind::Plugin => "plugin",
     }
 }
@@ -4799,10 +4846,10 @@ fn validate_plan_identity_material(plan: &nix_seal_core::PlanV2) -> Result<()> {
     let mut trusted = nix_seal_manifest::TrustedKeys::new();
     for (id, identity) in &plan.identities {
         match identity.kind {
-            nix_seal_core::IdentityKind::Signer => {
+            nix_seal_core::IdentityKind::Signer | nix_seal_core::IdentityKind::Authorizer => {
                 trusted
                     .insert_encoded(&identity.public)
-                    .with_context(|| format!("signer identity {id} is malformed or duplicated"))?;
+                    .with_context(|| format!("signing identity {id} is malformed or duplicated"))?;
             }
             nix_seal_core::IdentityKind::Plugin => {
                 nix_seal_crypto::recipient_fingerprint(&identity.public)
@@ -4826,6 +4873,33 @@ fn write_new_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
+        .open(path)
+        .with_context(|| format!("refusing to overwrite {}", path.display()))?;
+    file.write_all(&bytes)?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    Ok(())
+}
+
+/// Writes a delegated authorization artifact with owner-only permissions.
+///
+/// A create capability is not plaintext, but anyone who can read it can submit
+/// the exact committed secret before it expires.  It therefore has the same
+/// local confidentiality requirement as other short-lived authorization
+/// material.  Setting the mode at creation avoids a window where a permissive
+/// process umask could expose the new file.
+fn write_new_private_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(value)?;
+    let parent = path.parent().context("artifact path has no parent")?;
+    std::fs::create_dir_all(parent)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
         .open(path)
         .with_context(|| format!("refusing to overwrite {}", path.display()))?;
     file.write_all(&bytes)?;
@@ -4873,6 +4947,12 @@ fn run_secret(command: SecretCommand, json: bool) -> Result<()> {
         SecretCommand::Rekey(arguments) => run_secret_rekey(&arguments, json)?,
         SecretCommand::Delete(arguments) => run_secret_delete(&arguments, json)?,
         SecretCommand::Batch(arguments) => run_secret_batch(&arguments, json)?,
+        SecretCommand::Delegate(DelegateCommand::Issue(arguments)) => {
+            run_delegated_issue(&arguments, json)?;
+        }
+        SecretCommand::Delegate(DelegateCommand::Create(arguments)) => {
+            run_delegated_create(&arguments, json)?;
+        }
         SecretCommand::Reveal(arguments) => {
             if json {
                 bail!("secret reveal refuses --json because plaintext JSON output is forbidden");
@@ -4944,6 +5024,194 @@ fn run_secret(command: SecretCommand, json: bool) -> Result<()> {
                 println!("phase: {:?}", secret.phase);
             }
         }
+    }
+    Ok(())
+}
+
+const BOOTSTRAP_CREATE_PLAN_SCHEMA: &str = "nix-seal.bootstrap-create-plan.v1";
+const BOOTSTRAP_SOURCE_HASH: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+
+fn read_bootstrap_create_plan(path: &Path) -> Result<nix_seal_core::PlanV2> {
+    let mut plan = read_json_bounded::<nix_seal_core::PlanV2>(path)
+        .context("invalid strict bootstrap-create plan JSON")?;
+    if plan.schema != BOOTSTRAP_CREATE_PLAN_SCHEMA || plan.secrets.is_empty() {
+        bail!("expected a nonempty nix-seal.bootstrap-create-plan.v1 plan");
+    }
+    if plan
+        .secrets
+        .values()
+        .any(|secret| secret.source_ciphertext_hash != BOOTSTRAP_SOURCE_HASH)
+    {
+        bail!("bootstrap-create plans require the all-zero pending ciphertext hash");
+    }
+    // Structural policy is identical to plan.v2, but the distinct schema is
+    // never accepted by normal plan readers or activation paths.
+    nix_seal_core::PLAN_SCHEMA.clone_into(&mut plan.schema);
+    nix_seal_policy::validate(&plan)?;
+    validate_plan_identity_material(&plan)?;
+    BOOTSTRAP_CREATE_PLAN_SCHEMA.clone_into(&mut plan.schema);
+    Ok(plan)
+}
+
+fn bootstrap_recipients(
+    plan: &nix_seal_core::PlanV2,
+    secret: &nix_seal_core::Id,
+) -> Result<Vec<String>> {
+    let mut policy_plan = plan.clone();
+    nix_seal_core::PLAN_SCHEMA.clone_into(&mut policy_plan.schema);
+    Ok(nix_seal_policy::secret_recipients(&policy_plan, secret)?
+        .recipients
+        .values()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect())
+}
+
+fn recipient_set_hash(recipients: &[String]) -> Result<String> {
+    let payload = serde_jcs::to_vec(&serde_json::json!({
+        "schema":"nix-seal.recipient-set.v1",
+        "recipients":recipients,
+    }))?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"nix-seal delegated recipient set v1\0");
+    hasher.update(&payload);
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn delegated_authorizer_keys(
+    plan: &nix_seal_core::PlanV2,
+) -> Result<nix_seal_manifest::TrustedKeys> {
+    let mut keys = nix_seal_manifest::TrustedKeys::new();
+    for identity in plan.identities.values() {
+        if matches!(identity.kind, nix_seal_core::IdentityKind::Authorizer) {
+            keys.insert_encoded(&identity.public)?;
+        }
+    }
+    if keys.is_empty() {
+        bail!("bootstrap plan declares no delegated authorizer identity");
+    }
+    Ok(keys)
+}
+
+fn run_delegated_issue(arguments: &DelegatedIssueArgs, json: bool) -> Result<()> {
+    if arguments.expires_in_seconds == 0 || arguments.expires_in_seconds > 900 {
+        bail!("--expires-in-seconds must be between 1 and 900");
+    }
+    if arguments.plaintext_bytes == 0 || arguments.plaintext_bytes > 64 * 1024 {
+        bail!("--plaintext-bytes must be between 1 and 65536 for delegated creation");
+    }
+    let plan = read_bootstrap_create_plan(&arguments.bootstrap_plan)?;
+    let secret = plan
+        .secrets
+        .get(&arguments.secret)
+        .context("secret is absent from bootstrap plan")?;
+    let recipients = bootstrap_recipients(&plan, &arguments.secret)?;
+    let signing_key = read_signing_key(&arguments.authorizer_key)?;
+    if !plan.identities.values().any(|identity| {
+        matches!(identity.kind, nix_seal_core::IdentityKind::Authorizer)
+            && signing_key.matches_public_key(&identity.public)
+    }) {
+        bail!("authorizer key is not authorized by the bootstrap plan");
+    }
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let expires_at = now
+        .checked_add(arguments.expires_in_seconds)
+        .context("capability expiry overflow")?;
+    let mut nonce = [0_u8; 32];
+    getrandom::fill(&mut nonce).context("could not obtain capability randomness")?;
+    let capability = nix_seal_manifest::DelegatedCreateCapabilityV1 {
+        schema: nix_seal_manifest::DELEGATED_CREATE_CAPABILITY_SCHEMA.to_owned(),
+        operation: "create".to_owned(),
+        capability_id: URL_SAFE_NO_PAD.encode(nonce),
+        bootstrap_plan_hash: nix_seal_policy::plan_hash(&plan)?,
+        secret_id: arguments.secret.clone(),
+        source: secret.source.clone(),
+        recipient_set_hash: recipient_set_hash(&recipients)?,
+        plaintext_sha256: arguments.plaintext_sha256.clone(),
+        max_plaintext_bytes: arguments.plaintext_bytes,
+        issued_at: now,
+        not_before: now,
+        expires_at,
+    };
+    let signed = nix_seal_manifest::sign_delegated_create_capability(&capability, &signing_key)?;
+    write_new_private_json(&arguments.output, &signed)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({"schema":"nix-seal.output.v1","operation":"delegated-capability-issued","secretId":arguments.secret,"capability":arguments.output,"expiresAt":expires_at})
+        );
+    } else {
+        println!("{}", arguments.output.display());
+        eprintln!(
+            "issued a create-only capability for {} that expires at {expires_at}",
+            arguments.secret
+        );
+    }
+    Ok(())
+}
+
+fn run_delegated_create(arguments: &DelegatedCreateArgs, json: bool) -> Result<()> {
+    let plan = read_bootstrap_create_plan(&arguments.bootstrap_plan)?;
+    let capability: nix_seal_manifest::SignedDelegatedCreateCapabilityV1 =
+        read_json_bounded(&arguments.capability)?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let capability = nix_seal_manifest::verify_delegated_create_capability(
+        &capability,
+        &delegated_authorizer_keys(&plan)?,
+        now,
+        300,
+    )?;
+    if capability.bootstrap_plan_hash != nix_seal_policy::plan_hash(&plan)? {
+        bail!("capability is bound to a different bootstrap plan");
+    }
+    let secret = plan
+        .secrets
+        .get(&capability.secret_id)
+        .context("capability secret is absent from bootstrap plan")?;
+    let recipients = bootstrap_recipients(&plan, &capability.secret_id)?;
+    if capability.source != secret.source
+        || capability.recipient_set_hash != recipient_set_hash(&recipients)?
+    {
+        bail!("capability does not match the plan-derived destination or recipients");
+    }
+    let mut input = Zeroizing::new(Vec::new());
+    std::io::stdin()
+        .take(capability.max_plaintext_bytes + 1)
+        .read_to_end(&mut input)?;
+    if input.is_empty() || input.len() as u64 > capability.max_plaintext_bytes {
+        bail!("delegated plaintext is empty or exceeds the authorized byte limit");
+    }
+    let plaintext_digest = Sha256::digest(input.as_slice());
+    // `HexDisplay`'s Display implementation is uppercase. Capabilities use
+    // lowercase SHA-256, matching the policy schema and conventional CLI hash
+    // tools, so select LowerHex explicitly.
+    let digest = format!("{:x}", base16ct::HexDisplay(plaintext_digest.as_slice()));
+    if digest != capability.plaintext_sha256 {
+        bail!("delegated plaintext does not match the signed SHA-256 commitment");
+    }
+    let root = arguments
+        .repository_root
+        .canonicalize()
+        .context("repository root must exist")?;
+    let result = nix_seal_authoring::write_secret_create_delegated(
+        &root,
+        Path::new(&secret.source),
+        std::io::Cursor::new(input.as_slice()),
+        &recipients,
+    )?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({"schema":"nix-seal.output.v1","operation":"delegated-secret-created","secretId":capability.secret_id,"ciphertextPath":result.path,"ciphertextHash":result.ciphertext_hash,"recipientCount":recipients.len()})
+        );
+    } else {
+        println!("{}", result.path.display());
+        eprintln!(
+            "created canonical ciphertext for {}; mark the Nix declaration pending = false before activation",
+            capability.secret_id
+        );
     }
     Ok(())
 }
@@ -6480,6 +6748,27 @@ mod tests {
         let mut output = Vec::new();
         assert!(reader.read_to_end(&mut output).is_err());
         assert_eq!(output, b"ab");
+    }
+
+    #[test]
+    fn delegated_plaintext_commitments_use_lowercase_sha256() {
+        let digest = Sha256::digest(b"smithsonian-api-key");
+        assert_eq!(
+            format!("{:x}", base16ct::HexDisplay(digest.as_slice())),
+            "386eca066868ebea292cf13a93aa949dceb2b6e0a0125f24533dcb13bf632ede"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delegated_capability_artifacts_are_owner_only() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir()?;
+        let path = temporary.path().join("delegated-capability.json");
+        write_new_private_json(&path, &serde_json::json!({"capability": "test"}))?;
+        assert_eq!(std::fs::metadata(path)?.permissions().mode() & 0o777, 0o600);
+        Ok(())
     }
 
     #[cfg(unix)]

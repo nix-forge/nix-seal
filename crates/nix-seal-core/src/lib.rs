@@ -148,6 +148,12 @@ pub enum IdentityKind {
     Recovery,
     /// Artifact approval verifier.
     Signer,
+    /// Delegated canonical-secret creation capability verifier.
+    ///
+    /// This is intentionally separate from [`Self::Signer`]: approving a
+    /// target artifact and authorizing the first creation of a repository
+    /// ciphertext are different capabilities.
+    Authorizer,
     /// Standard age plugin reference.
     Plugin,
 }

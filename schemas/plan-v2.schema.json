@@ -382,6 +382,11 @@
           "const": "signer"
         },
         {
+          "description": "Delegated canonical-secret creation capability verifier.\n\nThis is intentionally separate from [`Self::Signer`]: approving a\ntarget artifact and authorizing the first creation of a repository\nciphertext are different capabilities.",
+          "type": "string",
+          "const": "authorizer"
+        },
+        {
           "description": "Standard age plugin reference.",
           "type": "string",
           "const": "plugin"

@@ -21,6 +21,7 @@ clap_complete.workspace = true
 clap_complete_nushell.workspace = true
 ed25519-dalek.workspace = true
 fs2.workspace = true
+getrandom.workspace = true
 jiff.workspace = true
 nix-seal-authoring.workspace = true
 nix-seal-cache.workspace = true

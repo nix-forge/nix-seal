@@ -95,6 +95,61 @@ in
       }
     );
 
+  # A deliberately separate plan for the first creation of secrets declared
+  # as `pending` by the Nix module.  It has no ciphertext to hash yet, so the
+  # sentinel is *only* legal under this distinct schema.  Normal commands
+  # continue to accept `nix-seal.plan.v2` exclusively.
+  mkBootstrapCreatePlan =
+    {
+      identities ? { },
+      groups ? { },
+      targets ? { },
+      secrets ? { },
+      generators ? { },
+      templates ? { },
+      approvalPolicies ? { },
+      backends ? { },
+    }:
+    let
+      checked = {
+        identities = validateCollection "identities" identities;
+        groups = validateCollection "groups" groups;
+        targets = validateCollection "targets" targets;
+        secrets = validateCollection "secrets" secrets;
+        generators = validateCollection "generators" generators;
+        templates = validateCollection "templates" templates;
+        approvalPolicies = validateCollection "approvalPolicies" approvalPolicies;
+        backends = validateCollection "backends" backends;
+      };
+      checkedSecrets = lib.mapAttrs (
+        id: secret:
+        if !builtins.isAttrs secret || !(secret ? source) || !builtins.isString secret.source then
+          throw "nix-seal.lib.mkBootstrapCreatePlan: secret ${id} must provide a repository-relative source string"
+        else if
+          builtins.match "[a-z0-9._/-]+" secret.source == null
+          || lib.hasPrefix "/" secret.source
+          || lib.hasInfix ".." secret.source
+          || lib.hasInfix "/./" secret.source
+        then
+          throw "nix-seal.lib.mkBootstrapCreatePlan: secret ${id} has an unsafe canonical source"
+        else
+          secret // { sourceCiphertextHash = builtins.concatStringsSep "" (builtins.genList (_: "0") 64); }
+      ) checked.secrets;
+    in
+    builtins.toJSON {
+      schema = "nix-seal.bootstrap-create-plan.v1";
+      inherit (checked)
+        identities
+        groups
+        targets
+        generators
+        templates
+        approvalPolicies
+        backends
+        ;
+      secrets = checkedSecrets;
+    };
+
   # Public, evaluated bridge for agenix-rekey migration. `rekeyFile` values must
   # be repository-relative strings (not Nix path values, which coerce to store
   # paths). Call `nix-seal migrate agenix-rekey --metadata` on the JSON output.

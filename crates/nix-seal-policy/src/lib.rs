@@ -286,28 +286,31 @@ pub fn validate(plan: &PlanV2) -> Result<(), PolicyError> {
                 "identity {id} has an invalid age recipient"
             )));
         }
-        if matches!(identity.kind, IdentityKind::Signer)
-            && nix_seal_manifest::validate_public_key(&identity.public).is_err()
+        if matches!(
+            identity.kind,
+            IdentityKind::Signer | IdentityKind::Authorizer
+        ) && nix_seal_manifest::validate_public_key(&identity.public).is_err()
         {
             return Err(PolicyError::Violation(format!(
-                "identity {id} has an invalid approval verification key"
+                "identity {id} has an invalid signing verification key"
             )));
         }
     }
     let mut signer_keys = BTreeMap::new();
     for (id, identity) in &plan.identities {
-        if matches!(identity.kind, IdentityKind::Signer)
-            && let Some(previous) = signer_keys.insert(
-                nix_seal_manifest::public_key_id(&identity.public).map_err(|_| {
-                    PolicyError::Violation(format!(
-                        "identity {id} has an invalid approval verification key"
-                    ))
-                })?,
-                id,
-            )
-        {
+        if matches!(
+            identity.kind,
+            IdentityKind::Signer | IdentityKind::Authorizer
+        ) && let Some(previous) = signer_keys.insert(
+            nix_seal_manifest::public_key_id(&identity.public).map_err(|_| {
+                PolicyError::Violation(format!(
+                    "identity {id} has an invalid signing verification key"
+                ))
+            })?,
+            id,
+        ) {
             return Err(PolicyError::Violation(format!(
-                "signer identities {previous} and {id} reuse one public verification key"
+                "signing identities {previous} and {id} reuse one public verification key"
             )));
         }
     }

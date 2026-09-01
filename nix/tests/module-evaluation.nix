@@ -141,6 +141,12 @@ let
           secrets."service-token" = {
             phase = "services";
             source = "secrets/alice/users/tester/nix-access-tokens.age";
+            serviceCredentials = lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+              {
+                unit = "example.service";
+                name = "service-token";
+              }
+            ];
           };
         };
       }
@@ -256,6 +262,15 @@ in
       builtins.elem "setupLaunchAgents" standaloneHomeConfiguration.config.home.activation.nixSealServices.after
       == pkgs.stdenv.hostPlatform.isDarwin;
     pkgs.runCommand "nix-seal-home-service-activation-order" { } "touch $out";
+  service-credential-policy-projection =
+    pkgs.runCommand "nix-seal-service-credential-policy-projection" { nativeBuildInputs = [ pkgs.jq ]; }
+      ''
+        jq -e '
+          .secrets["alice/users/tester/service-token"].runtime.restartUnits
+          == ${if pkgs.stdenv.hostPlatform.isLinux then "[\"example.service\"]" else "[]"}
+        ' ${standaloneHomeConfiguration.config.nixSeal.planFile} >/dev/null
+        touch "$out"
+      '';
   explicit-scope-overrides =
     assert overrideConfiguration.config.nixSeal.targetId == "host/custom";
     assert overrideConfiguration.config.nixSeal.secretScope == "systems/custom";

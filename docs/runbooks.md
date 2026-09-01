@@ -1,5 +1,14 @@
 # Security and recovery runbooks
 
+## Delegated pending-secret creation
+
+Use delegated creation only for a declared `pending = true` secret. Keep the
+authorizer private key outside the repository and Nix store. Issue a capability
+with a maximum 15-minute expiry, pipe the value to the delegated-create command,
+then set `pending = false` and re-evaluate the normal plan before provisioning.
+Do not reuse a capability after an error. Inspect the destination and its
+private receipt first. Delegated creation never replaces existing ciphertext.
+
 These procedures assume a reviewed `plan.v2.json`, a protected administrator
 workstation, and private identities stored outside the Nix store. Commands that
 can mutate state are shown first in their dry-run form. Never put a secret

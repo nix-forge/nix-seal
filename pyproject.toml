@@ -1,0 +1,32 @@
+[tool.ruff]
+preview = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["line-too-long"]
+
+[tool.ruff.lint.per-file-ignores]
+# NixOS test scripts receive these names from the test driver at runtime.
+"nix/tests/scripts/runtime-vm-test.py" = ["F821"]
+
+[tool.ruff.format]
+line-ending = "lf"
+preview = true
+
+[tool.ty.environment]
+python-version = "3.11"
+python-platform = "all"
+
+[tool.ty.src]
+include = ["nix/tests/scripts/**/*.py"]
+exclude = ["**/__pycache__"]
+
+[tool.ty.rules]
+# NixOS test scripts are executed with driver-provided globals. This project
+# contains only that dynamic test DSL, so unresolved references are not useful
+# type errors; the VM check validates the runtime contract itself.
+unresolved-reference = "ignore"
+
+[tool.ty.terminal]
+error-on-warning = true
+output-format = "concise"

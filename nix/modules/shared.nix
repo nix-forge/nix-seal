@@ -22,6 +22,10 @@ let
   # Capture the complete module argument set so target metadata is used when
   # a framework supplies it, without making it mandatory for standalone users.
   targetName = args.targetName or null;
+  # The host configuration owns the security-status diagnostic for an
+  # embedded Home Manager profile. A standalone Home Manager profile has no
+  # host layer and therefore remains responsible for showing it.
+  warnExternalAudit = targetKind != "homeManager" || (args.osConfig or null) == null;
   privateModeType = types.strMatching "0[1-7]00";
   idIsValid =
     value:
@@ -211,11 +215,37 @@ let
             "recovery"
           ]
       ) (builtins.attrNames (selectedAdministrator.identities or { }));
-  configuredSecrets = lib.filterAttrs (_: secret: secret.source != null) cfg.secrets;
-  missingSecretSources = lib.filterAttrs (_: secret: secret.source == null) cfg.secrets;
+  configuredSecrets = lib.filterAttrs (
+    _: secret: secret.source != null && !secret.pending
+  ) cfg.secrets;
+  pendingSecrets = lib.filterAttrs (_: secret: secret.pending) cfg.secrets;
+  missingSecretSources = lib.filterAttrs (
+    _: secret: secret.source == null && !secret.pending
+  ) cfg.secrets;
   configuredTemplates = lib.filterAttrs (_: template: template.source != null) cfg.templates;
+  # A systemd credential consumer must restart after a successful generation
+  # switch so it receives the new credential mount.  This is part of the
+  # canonical target policy as well as the activation document; otherwise the
+  # runtime correctly rejects an activation document that asks it to restart a
+  # unit the policy did not authorize.
+  restartUnitsForSecret =
+    secret:
+    lib.unique (secret.restartUnits ++ map (credential: credential.unit) secret.serviceCredentials);
+  materializeTemplateSource =
+    template:
+    toString (
+      builtins.path {
+        path = template.source;
+        name = "nix-seal-template-source";
+      }
+    );
   compiledPlanObjects = {
-    identities = projectAdminIdentities // cfg.identities;
+    # Delegated authorizers are deliberately absent from the normal plan: they
+    # have no role in activation or target-artifact approval, and including
+    # one would needlessly invalidate every existing artifact's plan hash.
+    identities = lib.filterAttrs (_: identity: identity.kind != "authorizer") (
+      projectAdminIdentities // cfg.identities
+    );
     groups = projectAdminGroups // projectLocalGroups;
     approvalPolicies = projectAdminApprovalPolicies // projectLocalApprovalPolicies;
     targets = lib.optionalAttrs (cfg.targetId != null) { ${cfg.targetId} = cfg.target; };
@@ -243,16 +273,16 @@ let
             group
             mode
             compatibilitySymlink
-            restartUnits
             reloadUnits
             ;
+          restartUnits = restartUnitsForSecret secret;
         };
       }
     ) configuredSecrets;
     templates = lib.mapAttrs' (
       name: template:
       lib.nameValuePair (canonicalTemplateId name) {
-        inherit (template) source;
+        source = materializeTemplateSource template;
         placeholders = lib.mapAttrs (_: placeholderDef: {
           secret = canonicalSecretId placeholderDef.secret;
           inherit (placeholderDef) encoding;
@@ -268,6 +298,43 @@ let
         };
       }
     ) configuredTemplates;
+  };
+  bootstrapPlanObjects = compiledPlanObjects // {
+    # The ordinary plan's secrets are intentionally replaced rather than
+    # extended: bootstrap plans can authorize creation only for pending
+    # secrets and can never be mistaken for an activation plan.
+    # Bootstrap plans retain authorizers, but normal plans never do.
+    identities = projectAdminIdentities // cfg.identities;
+    secrets = lib.mapAttrs' (
+      name: secret:
+      lib.nameValuePair (canonicalSecretId name) {
+        inherit (secret)
+          source
+          delivery
+          phase
+          lifecycle
+          ;
+        administrators = map (qualifyReference "administrator") secret.administrators;
+        consumers = lib.optional (cfg.targetId != null) cfg.targetId;
+        approvalPolicy =
+          if secret.approvalPolicy != null then
+            qualifyReference "approval policy" secret.approvalPolicy
+          else if defaultApprovalPolicy != null then
+            qualifyReference "default approval policy" defaultApprovalPolicy
+          else
+            null;
+        runtime = {
+          inherit (secret)
+            owner
+            group
+            mode
+            compatibilitySymlink
+            reloadUnits
+            ;
+          restartUnits = restartUnitsForSecret secret;
+        };
+      }
+    ) pendingSecrets;
   };
   phaseRuntimeDirectory =
     phase: if phase == "activation" then cfg.runtimeDirectory else "${cfg.runtimeDirectory}/${phase}";
@@ -337,7 +404,7 @@ let
         inherit (secret) compatibilitySymlink;
       }) secrets;
       templates = lib.mapAttrsToList (_: template: {
-        source = toString template.source;
+        source = materializeTemplateSource template;
         templateId = template.id;
         placeholders = lib.mapAttrs (_: placeholderDef: {
           secretId = cfg.secrets.${placeholderDef.secret}.id;
@@ -400,6 +467,18 @@ in
         self.lib.mkPlan (compiledPlanObjects // { inherit (cfg) repositoryRoot; })
       );
       description = "Canonical compiled plan.v2 JSON used to derive and verify target policy.";
+    };
+    bootstrapPlanFile = mkOption {
+      type = types.nullOr types.path;
+      readOnly = true;
+      default =
+        if pendingSecrets == { } then
+          null
+        else
+          pkgs.writeText "nix-seal-bootstrap-create-plan-v1.json" (
+            self.lib.mkBootstrapCreatePlan bootstrapPlanObjects
+          );
+      description = "Public, create-only plan for explicitly pending secrets. It is never used by activation or provisioning.";
     };
     repositoryRoot = mkOption {
       type = types.path;
@@ -515,6 +594,15 @@ in
                   else
                     null;
                 description = "Repository-relative canonical .age ciphertext source; scoped targets derive this from the canonical ID.";
+              };
+              pending = mkOption {
+                type = types.bool;
+                default = false;
+                description = ''
+                  Declare a first canonical ciphertext that has not been
+                  created yet. Pending secrets are excluded from the normal
+                  plan and activation; they appear only in bootstrapPlanFile.
+                '';
               };
               delivery = mkOption {
                 type = types.enum [
@@ -724,8 +812,8 @@ in
             message = "nixSeal.planFile must provide canonical compiled plan.v2 JSON";
           }
           {
-            assertion = configuredSecrets != { };
-            message = "nixSeal requires at least one configured canonical secret source";
+            assertion = configuredSecrets != { } || pendingSecrets != { };
+            message = "nixSeal requires at least one configured canonical source or pending secret";
           }
           {
             assertion = missingSecretSources == { };
@@ -734,6 +822,10 @@ in
                 secret = builtins.head (builtins.attrNames missingSecretSources);
               in
               "nixSeal secret ${secret} is missing its canonical repository source";
+          }
+          {
+            assertion = lib.all (secret: secret.source != null) (builtins.attrValues pendingSecrets);
+            message = "a pending nixSeal secret requires its canonical repository source path";
           }
           {
             assertion =
@@ -805,7 +897,7 @@ in
             message = "a systemd service credential name may be mapped by only one nixSeal secret";
           }
         ];
-        warnings = [ "nix-seal is pre-1.0 and has not passed its required external security audit" ];
+        warnings = lib.optional warnExternalAudit "nix-seal is pre-1.0 and has not passed its required external security audit";
       }
       (serviceCredentialConfig serviceCredentialBindings)
     ]

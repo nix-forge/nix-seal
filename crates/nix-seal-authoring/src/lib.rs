@@ -406,6 +406,43 @@ pub fn write_secret<R: Read + Send>(
     )
 }
 
+/// Creates a new canonical ciphertext without a decryption round trip.
+///
+/// This is intentionally create-only and exists solely for a separately
+/// verified, single-secret delegated capability. Callers must verify the
+/// plaintext commitment before invoking it. It must never be used for normal
+/// authoring, rekeying, or replacement.
+pub fn write_secret_create_delegated<R: Read + Send>(
+    repository_root: &Path,
+    relative_destination: &Path,
+    input: R,
+    recipients: &[String],
+) -> Result<AuthoringResult, AuthoringError> {
+    let _repository_lock = acquire_repository_lock(repository_root)?;
+    let destination = resolve_destination(repository_root, relative_destination)?;
+    validate_destination(&destination, WriteMode::Create)?;
+    let parent = destination.parent().ok_or(AuthoringError::UnsafePath)?;
+    let mut staged = NamedTempFile::new_in(parent).map_err(AuthoringError::Io)?;
+    set_private_file(staged.as_file()).map_err(AuthoringError::Io)?;
+    let mut hashing_input = HashingReader::new(input);
+    nix_seal_crypto::encrypt(&mut hashing_input, staged.as_file_mut(), recipients)?;
+    staged.as_file().sync_all().map_err(AuthoringError::Io)?;
+    let (_, plaintext_bytes) = hashing_input.finish();
+    staged.as_file_mut().rewind().map_err(AuthoringError::Io)?;
+    let ciphertext_hash = hash_file(staged.as_file_mut())?;
+    staged
+        .persist_noclobber(&destination)
+        .map_err(|error| AuthoringError::Io(error.error))?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| AuthoringError::DurabilityUnknown)?;
+    Ok(AuthoringResult {
+        path: destination,
+        ciphertext_hash,
+        plaintext_bytes,
+    })
+}
+
 /// Encrypts a bounded input and runs a caller-supplied final input check before
 /// committing ciphertext. This lets migration callers stream an external
 /// decryptor directly into age encryption while still failing closed when that

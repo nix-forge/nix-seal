@@ -3,7 +3,8 @@
 ## Assets and trust boundaries
 
 Assets are canonical plaintext, administrator and target identities, signing
-keys, target artifacts, runtime generations, prompt input, and generator output.
+keys, delegated-create capabilities and authorizer keys, target artifacts,
+runtime generations, prompt input, and generator output.
 Trust boundaries exist at Git review, administrator machines, age plugins and
 agents, the ciphertext cache, Nix builders/binary caches, deployment transport,
 target activation, generators/editors, and privileged service consumers.
@@ -44,6 +45,13 @@ falls back once with a diagnostic warning. macOS and other platforms warn
 because network isolation is unavailable. Generator executables and declared
 runtime inputs remain trusted-code boundaries on every platform.
 
+Delegated creation accepts only a short-lived, one-use capability for one
+missing pending source, public recipient set, and plaintext commitment. The CLI
+derives every binding from a strict bootstrap plan and rejects replay,
+replacement, expiry, source or recipient substitution, altered commitments,
+and artifact-signer reuse. The delegate has no age identity. Capability
+receipts contain no plaintext and use private, no-follow repository paths.
+
 Security tests cover traversal, symlink/hardlink/TOCTOU races, malformed crypto
 and signatures, replay and target substitution, disk exhaustion, crashes,
 concurrency, secret canaries, and denial-of-service bounds. Post-switch service
@@ -62,6 +70,7 @@ is spawned.
 - Zeroization cannot prove every compiler/runtime copy disappeared.
 - Static rotation cannot update an external service without a rotation provider.
 - Availability under a fully compromised host/kernel is out of scope.
+- Offline capabilities cannot be globally revoked before their bounded expiry.
 
 ## Review cadence
 
