@@ -678,9 +678,31 @@ enum SecretCommand {
     /// Import or edit a logical JSON/TOML/YAML/dotenv collection and atomically
     /// split its mapped fields into independent canonical ciphertext files.
     Batch(CollectionBatchArgs),
-    /// Issue or consume a narrowly scoped, create-only capability for a pending secret.
+    /// Complete first-time creation or use an advanced delegated capability flow.
+    #[command(subcommand)]
+    Bootstrap(BootstrapCommand),
+    /// Issue or consume a narrowly scoped, create-only capability for a bootstrapped secret.
     #[command(subcommand)]
     Delegate(DelegateCommand),
+}
+
+#[derive(Subcommand)]
+enum BootstrapCommand {
+    /// Authorize and create an absent canonical ciphertext in one operation.
+    Complete(BootstrapCompleteArgs),
+}
+
+#[derive(Args)]
+struct BootstrapCompleteArgs {
+    #[arg(long)]
+    bootstrap_plan: PathBuf,
+    #[arg(long)]
+    secret: nix_seal_core::Id,
+    /// Explicit local authorizer signing key; it must not be in the repository or Nix store.
+    #[arg(long)]
+    authorizer_key: PathBuf,
+    #[arg(long, default_value = ".")]
+    repository_root: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -4947,6 +4969,9 @@ fn run_secret(command: SecretCommand, json: bool) -> Result<()> {
         SecretCommand::Rekey(arguments) => run_secret_rekey(&arguments, json)?,
         SecretCommand::Delete(arguments) => run_secret_delete(&arguments, json)?,
         SecretCommand::Batch(arguments) => run_secret_batch(&arguments, json)?,
+        SecretCommand::Bootstrap(BootstrapCommand::Complete(arguments)) => {
+            run_bootstrap_complete(&arguments, json)?;
+        }
         SecretCommand::Delegate(DelegateCommand::Issue(arguments)) => {
             run_delegated_issue(&arguments, json)?;
         }
@@ -5095,6 +5120,80 @@ fn delegated_authorizer_keys(
     Ok(keys)
 }
 
+fn read_bootstrap_plaintext() -> Result<Zeroizing<Vec<u8>>> {
+    const MAX_BOOTSTRAP_PLAINTEXT_BYTES: u64 = 64 * 1024;
+    let mut input = Zeroizing::new(Vec::new());
+    std::io::stdin()
+        .take(MAX_BOOTSTRAP_PLAINTEXT_BYTES + 1)
+        .read_to_end(&mut input)?;
+    if input.is_empty() || input.len() as u64 > MAX_BOOTSTRAP_PLAINTEXT_BYTES {
+        bail!("bootstrap plaintext is empty or exceeds the 65536 byte limit");
+    }
+    Ok(input)
+}
+
+fn ensure_bootstrap_authorizer(
+    plan: &nix_seal_core::PlanV2,
+    authorizer_key: &Path,
+) -> Result<nix_seal_manifest::ApprovalSigningKey> {
+    let signing_key = read_signing_key(authorizer_key)?;
+    if !plan.identities.values().any(|identity| {
+        matches!(identity.kind, nix_seal_core::IdentityKind::Authorizer)
+            && signing_key.matches_public_key(&identity.public)
+    }) {
+        bail!("authorizer key is not authorized by the bootstrap plan");
+    }
+    Ok(signing_key)
+}
+
+fn write_bootstrap_secret(
+    plan: &nix_seal_core::PlanV2,
+    secret_id: &nix_seal_core::Id,
+    repository_root: &Path,
+    input: &[u8],
+    json: bool,
+    operation: &str,
+) -> Result<()> {
+    let secret = plan
+        .secrets
+        .get(secret_id)
+        .context("secret is absent from bootstrap plan")?;
+    let recipients = bootstrap_recipients(plan, secret_id)?;
+    let root = repository_root
+        .canonicalize()
+        .context("repository root must exist")?;
+    let result = nix_seal_authoring::write_secret_create_delegated(
+        &root,
+        Path::new(&secret.source),
+        std::io::Cursor::new(input),
+        &recipients,
+    )?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({"schema":"nix-seal.output.v1","operation":operation,"ciphertextHash":result.ciphertext_hash,"recipientCount":recipients.len()})
+        );
+    } else {
+        println!("ciphertext created");
+        eprintln!("re-evaluate the normal Nix plan before activation");
+    }
+    Ok(())
+}
+
+fn run_bootstrap_complete(arguments: &BootstrapCompleteArgs, json: bool) -> Result<()> {
+    let plan = read_bootstrap_create_plan(&arguments.bootstrap_plan)?;
+    let _ = ensure_bootstrap_authorizer(&plan, &arguments.authorizer_key)?;
+    let input = read_bootstrap_plaintext()?;
+    write_bootstrap_secret(
+        &plan,
+        &arguments.secret,
+        &arguments.repository_root,
+        input.as_slice(),
+        json,
+        "bootstrap-secret-created",
+    )
+}
+
 fn run_delegated_issue(arguments: &DelegatedIssueArgs, json: bool) -> Result<()> {
     if arguments.expires_in_seconds == 0 || arguments.expires_in_seconds > 900 {
         bail!("--expires-in-seconds must be between 1 and 900");
@@ -5108,13 +5207,7 @@ fn run_delegated_issue(arguments: &DelegatedIssueArgs, json: bool) -> Result<()>
         .get(&arguments.secret)
         .context("secret is absent from bootstrap plan")?;
     let recipients = bootstrap_recipients(&plan, &arguments.secret)?;
-    let signing_key = read_signing_key(&arguments.authorizer_key)?;
-    if !plan.identities.values().any(|identity| {
-        matches!(identity.kind, nix_seal_core::IdentityKind::Authorizer)
-            && signing_key.matches_public_key(&identity.public)
-    }) {
-        bail!("authorizer key is not authorized by the bootstrap plan");
-    }
+    let signing_key = ensure_bootstrap_authorizer(&plan, &arguments.authorizer_key)?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let expires_at = now
         .checked_add(arguments.expires_in_seconds)
@@ -5188,28 +5281,14 @@ fn run_delegated_create(arguments: &DelegatedCreateArgs, json: bool) -> Result<(
     if digest != capability.plaintext_sha256 {
         bail!("delegated plaintext does not match the signed SHA-256 commitment");
     }
-    let root = arguments
-        .repository_root
-        .canonicalize()
-        .context("repository root must exist")?;
-    let result = nix_seal_authoring::write_secret_create_delegated(
-        &root,
-        Path::new(&secret.source),
-        std::io::Cursor::new(input.as_slice()),
-        &recipients,
-    )?;
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({"schema":"nix-seal.output.v1","operation":"delegated-secret-created","ciphertextHash":result.ciphertext_hash,"recipientCount":recipients.len()})
-        );
-    } else {
-        println!("ciphertext created");
-        eprintln!(
-            "created canonical ciphertext; mark the Nix declaration pending = false before activation"
-        );
-    }
-    Ok(())
+    write_bootstrap_secret(
+        &plan,
+        &capability.secret_id,
+        &arguments.repository_root,
+        input.as_slice(),
+        json,
+        "delegated-secret-created",
+    )
 }
 
 fn run_secret_delete(arguments: &SecretDeleteArgs, json: bool) -> Result<()> {

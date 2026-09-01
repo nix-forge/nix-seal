@@ -46,7 +46,7 @@ because network isolation is unavailable. Generator executables and declared
 runtime inputs remain trusted-code boundaries on every platform.
 
 Delegated creation accepts only a short-lived, one-use capability for one
-missing pending source, public recipient set, and plaintext commitment. The CLI
+missing declared source, public recipient set, and plaintext commitment. The CLI
 derives every binding from a strict bootstrap plan and rejects replay,
 replacement, expiry, source or recipient substitution, altered commitments,
 and artifact-signer reuse. The delegate has no age identity. Capability

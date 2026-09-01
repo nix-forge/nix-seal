@@ -408,10 +408,10 @@ pub fn write_secret<R: Read + Send>(
 
 /// Creates a new canonical ciphertext without a decryption round trip.
 ///
-/// This is intentionally create-only and exists solely for a separately
-/// verified, single-secret delegated capability. Callers must verify the
-/// plaintext commitment before invoking it. It must never be used for normal
-/// authoring, rekeying, or replacement.
+/// This is intentionally create-only and exists solely for a bootstrap plan
+/// that has already authorized one secret and derived its recipient set.
+/// Delegated callers must also verify the plaintext commitment before invoking
+/// it. It must never be used for normal authoring, rekeying, or replacement.
 pub fn write_secret_create_delegated<R: Read + Send>(
     repository_root: &Path,
     relative_destination: &Path,

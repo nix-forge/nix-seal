@@ -95,9 +95,9 @@ in
       }
     );
 
-  # A deliberately separate plan for the first creation of secrets declared
-  # as `pending` by the Nix module.  It has no ciphertext to hash yet, so the
-  # sentinel is *only* legal under this distinct schema.  Normal commands
+  # A deliberately separate plan for the first creation of declared canonical
+  # ciphertext sources that do not exist yet. It has no ciphertext to hash, so
+  # the sentinel is legal only under this distinct schema. Normal commands
   # continue to accept `nix-seal.plan.v2` exclusively.
   mkBootstrapCreatePlan =
     {
