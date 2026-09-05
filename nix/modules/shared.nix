@@ -264,7 +264,14 @@ let
     );
     groups = projectAdminGroups // projectLocalGroups;
     approvalPolicies = projectAdminApprovalPolicies // projectLocalApprovalPolicies;
-    targets = lib.optionalAttrs (cfg.targetId != null) { ${cfg.targetId} = cfg.target; };
+    targets = lib.optionalAttrs (cfg.targetId != null) {
+      ${cfg.targetId} = cfg.target // {
+        serviceActions = {
+          executable = serviceExecutable;
+          timeoutSeconds = cfg.serviceActionTimeout;
+        };
+      };
+    };
     secrets = lib.mapAttrs' (
       name: secret:
       lib.nameValuePair (canonicalSecretId name) {

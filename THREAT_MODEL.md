@@ -45,12 +45,39 @@ falls back once with a diagnostic warning. macOS and other platforms warn
 because network isolation is unavailable. Generator executables and declared
 runtime inputs remain trusted-code boundaries on every platform.
 
+Generator executables, runtime input directories, and their entries must resolve
+inside `/nix/store` before secret inputs are staged. An empty runtime input list
+creates an empty PATH; empty components in a nonempty PATH are rejected.
+Persistent prompt responses live in an owner-only, repository-keyed XDG state
+directory outside the checkout. Repository-local legacy prompt state blocks
+generation until the operator relocates or removes it before Nix evaluation.
+The checked-in direnv file performs no evaluation, so a prior direnv approval
+does not authorize a later branch's Nix code.
+
+Identity, group, and target IDs occupy disjoint authorization namespaces.
+Approval thresholds count distinct Ed25519 key material across native and
+OpenSSH encodings. Legacy SSH signature IDs remain verifiable but cannot add a
+second vote for the same key. Normal encryption and decryption reject SSH RSA;
+explicit migration alone may decrypt legacy RSA sources.
+
+Foreign cache imports are validated in a private staging cache before publishing
+entries under one destination lock. Imports have aggregate entry and byte
+limits, and inventory has an envelope-memory limit. Conflicting or malformed
+input cannot publish a partially validated import. Physical I/O failure during
+publication may leave a subset of independently validated entries; retry remains
+append-only and idempotent. Activation ignores unauthenticated envelopes and
+requires a verified matching artifact for every selected secret. Migration
+traversal bounds every visited entry, including directories and unrelated files.
+
 Delegated creation accepts only a short-lived, one-use capability for one
 missing declared source, public recipient set, and plaintext commitment. The CLI
 derives every binding from a strict bootstrap plan and rejects replay,
 replacement, expiry, source or recipient substitution, altered commitments,
 and artifact-signer reuse. The delegate has no age identity. Capability
 receipts contain no plaintext and use private, no-follow repository paths.
+The signed protocol limits delegated plaintext to 64 KiB. Direct bootstrap
+completion proves current private-key possession with a fresh random challenge
+before reading plaintext, including when the authorizer uses an SSH agent.
 
 Security tests cover traversal, symlink/hardlink/TOCTOU races, malformed crypto
 and signatures, replay and target substitution, disk exhaustion, crashes,
@@ -58,6 +85,8 @@ concurrency, secret canaries, and denial-of-service bounds. Post-switch service
 actions are constrained to the expected manager binary and protected canonical
 paths; writable or non-executable manager files are rejected before any process
 is spawned.
+The target-policy hash also binds the exact service executable and timeout, so
+an activation document cannot substitute another otherwise valid command.
 
 ## Out of scope and unavoidable limits
 

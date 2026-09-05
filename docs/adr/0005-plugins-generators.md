@@ -48,3 +48,18 @@ multiline prompts require Ctrl-D and preserve entered line endings. Prompt input
 never passes through stdin/stdout, argv, ordinary environment variables, the
 plan, or logs. Platforms without the reviewed termios implementation fail
 closed.
+
+Before staging secret inputs, generator executables and runtime input paths are
+canonicalized and required to remain inside `/nix/store`, including symlinked
+entries in runtime `bin` directories. A generator without runtime inputs receives
+an empty PATH. A nonempty PATH cannot contain an empty component that would
+search the workspace.
+
+Persistent prompt responses are plaintext credentials. They live beneath the
+user's XDG state directory outside the checkout, keyed by hashes of the canonical
+repository path and the separate generator and prompt IDs. Directory ownership,
+permissions, and links are checked before use. Responses are persisted only after
+ciphertext publication; a persistence failure can require the operator to supply
+the prompt again. Legacy repository-local prompt state blocks generation and
+requires explicit cleanup before Nix evaluation. The repository's direnv file
+is inert to prevent a durable approval from evaluating a changed checkout.

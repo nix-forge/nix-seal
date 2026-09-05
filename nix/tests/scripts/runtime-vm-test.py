@@ -37,6 +37,10 @@ machine.succeed(
     'system = "x86_64-linux"' \
     'identity = "target"' \
     "" \
+    '[targets.vm.serviceActions]' \
+    'executable = "/run/current-system/sw/bin/systemctl"' \
+    'timeoutSeconds = 30' \
+    "" \
     '[approvalPolicies.release]' \
     'threshold = 1' \
     'signers = ["signer"]' \
@@ -128,6 +132,18 @@ machine.succeed(
     }' > "$root/activation.json"
 
   systemctl daemon-reload
+
+  # A valid command path or timeout cannot override the signed target policy.
+  # Both substitutions must fail before the first plaintext generation exists.
+  jq '.postSwitch.timeoutSeconds = 31' "$root/activation.json" > "$root/substituted.json"
+  ! nix-seal activate --spec "$root/substituted.json" --identity "$root/target.age"
+  test ! -e /run/nix-seal/current
+  jq --arg executable "$(readlink -f /run/current-system/sw/bin/systemctl)" \
+    '.postSwitch.executable = $executable' \
+    "$root/activation.json" > "$root/substituted.json"
+  ! nix-seal activate --spec "$root/substituted.json" --identity "$root/target.age"
+  test ! -e /run/nix-seal/current
+
   nix-seal activate --spec "$root/activation.json" --identity "$root/target.age"
   systemctl start nix-seal-test.service
   cmp /run/nix-seal-service-observed /run/nix-seal/current/app/token

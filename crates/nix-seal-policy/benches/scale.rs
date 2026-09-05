@@ -182,6 +182,7 @@ fn build_plan(size: usize) -> Result<PlanV2, Box<dyn std::error::Error>> {
                 configuration: Some("benchmark".to_owned()),
                 environment: Some("ci".to_owned()),
                 tags: vec!["benchmark".to_owned()],
+                service_actions: None,
             },
         );
         plan.secrets.insert(

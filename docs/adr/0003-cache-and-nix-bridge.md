@@ -73,6 +73,16 @@ address with different ciphertext or envelope fails closed. Artifact
 authorization remains a policy/activation operation, so importing an artifact
 never by itself grants it runtime use.
 
+Foreign imports first copy into a private staging cache. Before any destination
+entry is published, the entire snapshot must satisfy the 10000-entry, 8 GiB
+transfer, and 64 MiB aggregate envelope limits. Destination conflicts are checked
+under the same cache lock used for publication. Invalid input therefore leaves
+the destination untouched; a physical I/O failure can leave only a subset of
+validated, independently committed entries that an idempotent retry can finish.
+Activation skips malformed or untrusted signed envelopes but still requires a
+valid matching artifact for every secret. Unsafe filesystem layouts remain hard
+failures.
+
 The module accepts one absolute, out-of-store `artifactCacheRoot`. It never
 imports a cache entry into a derivation and has no per-artifact address options.
 At activation the Rust runtime enumerates the root, rejects unsafe bundles, and

@@ -189,6 +189,19 @@ pub struct Target {
     /// Public selector tags.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Exact executable and timeout permitted for post-switch service actions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_actions: Option<TargetServiceActions>,
+}
+
+/// Target-owned command policy for privileged post-switch service actions.
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TargetServiceActions {
+    /// Exact absolute executable path emitted into the activation document.
+    pub executable: String,
+    /// Per-action timeout in seconds.
+    pub timeout_seconds: u64,
 }
 
 /// Supported integration type.

@@ -519,7 +519,7 @@ pub fn rekey_secret(
     verification_identity: &SecretString,
     mode: WriteMode,
 ) -> Result<AuthoringResult, AuthoringError> {
-    rekey_secret_with_identities(
+    rekey_secret_inner(
         repository_root,
         relative_source,
         relative_destination,
@@ -527,6 +527,7 @@ pub fn rekey_secret(
         verification_identity,
         verification_identity,
         mode,
+        false,
     )
 }
 
@@ -543,6 +544,56 @@ pub fn rekey_secret_with_identities(
     verification_identity: &SecretString,
     mode: WriteMode,
 ) -> Result<AuthoringResult, AuthoringError> {
+    rekey_secret_inner(
+        repository_root,
+        relative_source,
+        relative_destination,
+        recipients,
+        source_identity,
+        verification_identity,
+        mode,
+        false,
+    )
+}
+
+/// Rekeys a migration source with a distinct verification identity.
+///
+/// Unlike normal authoring APIs, this compatibility boundary permits a legacy
+/// SSH RSA source identity. Destination recipients and the verification
+/// identity remain subject to the normal recipient and decrypt restrictions.
+#[allow(clippy::too_many_arguments)]
+pub fn rekey_migration_secret_with_identities(
+    repository_root: &Path,
+    relative_source: &Path,
+    relative_destination: &Path,
+    recipients: &[String],
+    source_identity: &SecretString,
+    verification_identity: &SecretString,
+    mode: WriteMode,
+) -> Result<AuthoringResult, AuthoringError> {
+    rekey_secret_inner(
+        repository_root,
+        relative_source,
+        relative_destination,
+        recipients,
+        source_identity,
+        verification_identity,
+        mode,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rekey_secret_inner(
+    repository_root: &Path,
+    relative_source: &Path,
+    relative_destination: &Path,
+    recipients: &[String],
+    source_identity: &SecretString,
+    verification_identity: &SecretString,
+    mode: WriteMode,
+    allow_legacy_source_identity: bool,
+) -> Result<AuthoringResult, AuthoringError> {
     let _repository_lock = acquire_repository_lock(repository_root)?;
     if !recipients.iter().any(|recipient| {
         nix_seal_crypto::identity_matches_recipient(verification_identity, recipient)
@@ -556,12 +607,21 @@ pub fn rekey_secret_with_identities(
     let parent = destination.parent().ok_or(AuthoringError::UnsafePath)?;
     let mut staged = NamedTempFile::new_in(parent).map_err(AuthoringError::Io)?;
     set_private_file(staged.as_file()).map_err(AuthoringError::Io)?;
-    nix_seal_crypto::rekey(
-        source_file,
-        staged.as_file_mut(),
-        source_identity,
-        recipients,
-    )?;
+    if allow_legacy_source_identity {
+        nix_seal_crypto::rekey_migration(
+            source_file,
+            staged.as_file_mut(),
+            source_identity,
+            recipients,
+        )?;
+    } else {
+        nix_seal_crypto::rekey(
+            source_file,
+            staged.as_file_mut(),
+            source_identity,
+            recipients,
+        )?;
+    }
     staged.as_file().sync_all().map_err(AuthoringError::Io)?;
     staged.as_file_mut().rewind().map_err(AuthoringError::Io)?;
     let mut verified = HashingWriter::default();
@@ -607,12 +667,13 @@ pub fn rekey_secret_batch(
     verification_identity: &SecretString,
     mode: WriteMode,
 ) -> Result<Vec<AuthoringResult>, AuthoringError> {
-    rekey_secret_batch_with_identities(
+    rekey_secret_batch_inner(
         repository_root,
         writes,
         verification_identity,
         verification_identity,
         mode,
+        false,
     )
 }
 
@@ -627,6 +688,43 @@ pub fn rekey_secret_batch_with_identities(
     source_identity: &SecretString,
     verification_identity: &SecretString,
     mode: WriteMode,
+) -> Result<Vec<AuthoringResult>, AuthoringError> {
+    rekey_secret_batch_inner(
+        repository_root,
+        writes,
+        source_identity,
+        verification_identity,
+        mode,
+        false,
+    )
+}
+
+/// Batch variant of [`rekey_migration_secret_with_identities`].
+pub fn rekey_migration_secret_batch_with_identities(
+    repository_root: &Path,
+    writes: &[BatchRekeyWrite<'_>],
+    source_identity: &SecretString,
+    verification_identity: &SecretString,
+    mode: WriteMode,
+) -> Result<Vec<AuthoringResult>, AuthoringError> {
+    rekey_secret_batch_inner(
+        repository_root,
+        writes,
+        source_identity,
+        verification_identity,
+        mode,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+fn rekey_secret_batch_inner(
+    repository_root: &Path,
+    writes: &[BatchRekeyWrite<'_>],
+    source_identity: &SecretString,
+    verification_identity: &SecretString,
+    mode: WriteMode,
+    allow_legacy_source_identity: bool,
 ) -> Result<Vec<AuthoringResult>, AuthoringError> {
     let _repository_lock = acquire_repository_lock(repository_root)?;
     if writes.is_empty() || writes.len() > 10_000 {
@@ -662,12 +760,21 @@ pub fn rekey_secret_batch_with_identities(
         let mut staged = NamedTempFile::new_in(&parent).map_err(AuthoringError::Io)?;
         set_private_file(staged.as_file()).map_err(AuthoringError::Io)?;
         let (source_hash, _) = hash_bounded_file(&source, 64 * 1024 * 1024)?;
-        nix_seal_crypto::rekey(
-            open_nofollow_regular(&source)?,
-            staged.as_file_mut(),
-            source_identity,
-            write.recipients,
-        )?;
+        if allow_legacy_source_identity {
+            nix_seal_crypto::rekey_migration(
+                open_nofollow_regular(&source)?,
+                staged.as_file_mut(),
+                source_identity,
+                write.recipients,
+            )?;
+        } else {
+            nix_seal_crypto::rekey(
+                open_nofollow_regular(&source)?,
+                staged.as_file_mut(),
+                source_identity,
+                write.recipients,
+            )?;
+        }
         staged.as_file().sync_all().map_err(AuthoringError::Io)?;
         let (source_hash_after, _) = hash_bounded_file(&source, 64 * 1024 * 1024)?;
         if source_hash_after != source_hash {

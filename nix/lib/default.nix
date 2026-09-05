@@ -20,6 +20,19 @@ let
       else
         value;
 
+  validateAuthorizationNamespace =
+    checked:
+    let
+      collisions =
+        lib.intersectLists (builtins.attrNames checked.identities) (builtins.attrNames checked.groups)
+        ++ lib.intersectLists (builtins.attrNames checked.identities) (builtins.attrNames checked.targets)
+        ++ lib.intersectLists (builtins.attrNames checked.groups) (builtins.attrNames checked.targets);
+    in
+    if collisions != [ ] then
+      throw "nix-seal.lib: authorization ID ${builtins.head collisions} is reused across identities, groups, or targets"
+    else
+      checked;
+
 in
 {
   schemaVersion = "nix-seal.plan.v2";
@@ -46,7 +59,7 @@ in
       repositoryRoot,
     }:
     let
-      checked = {
+      checked = validateAuthorizationNamespace {
         identities = validateCollection "identities" identities;
         groups = validateCollection "groups" groups;
         targets = validateCollection "targets" targets;
@@ -111,7 +124,7 @@ in
       backends ? { },
     }:
     let
-      checked = {
+      checked = validateAuthorizationNamespace {
         identities = validateCollection "identities" identities;
         groups = validateCollection "groups" groups;
         targets = validateCollection "targets" targets;

@@ -10,6 +10,10 @@ runtime permissions and service actions, and templates whose complete secret
 dependency set is authorized. Both the full plan and projection use canonical
 JSON and domain-separated BLAKE3 hashes.
 
+The service-action projection includes the exact manager executable path and
+timeout as well as the unit sets. The privileged activator rejects any drift;
+store membership or a `systemctl` basename alone is not an authorization.
+
 Group traversal is iterative and bounded. Cycles, missing members, duplicate
 signers, invalid thresholds, missing default signers, and unresolved identities
 fail plan validation. Target template inclusion is fail-closed: a template is

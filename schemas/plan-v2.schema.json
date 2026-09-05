@@ -601,6 +601,17 @@
           "description": "Integration type.",
           "$ref": "#/$defs/TargetKind"
         },
+        "serviceActions": {
+          "description": "Exact executable and timeout permitted for post-switch service actions.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TargetServiceActions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "system": {
           "description": "Nix system value.",
           "type": "string"
@@ -641,6 +652,24 @@
           "const": "homeManager"
         }
       ]
+    },
+    "TargetServiceActions": {
+      "description": "Target-owned command policy for privileged post-switch service actions.",
+      "type": "object",
+      "properties": {
+        "executable": {
+          "description": "Exact absolute executable path emitted into the activation document.",
+          "type": "string"
+        },
+        "timeoutSeconds": {
+          "description": "Per-action timeout in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": ["executable", "timeoutSeconds"]
     },
     "TargetSelectors": {
       "description": "Public selectors for expanding a secret's authorized target set.\n\nNon-empty fields are `ANDed`, while values within one field are `ORed`. The\n`tags` field is the exception: every listed tag is required. Explicit\nconsumers remain a separate union, so adding a selector never removes an\nexisting target authorization.",

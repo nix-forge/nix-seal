@@ -27,6 +27,11 @@ comments do not affect the approval key ID or authorization comparison. Plan
 validation rejects comment-only duplicates before approval thresholds are
 calculated, so one OpenSSH key cannot inflate an N-of-M policy.
 
+Signer identity is derived from the Ed25519 public key bytes across both native
+and OpenSSH encodings. Declaring both encodings does not create two signers.
+Verification accepts the legacy SSH wire key ID for existing envelopes, while
+duplicate detection and threshold counting use the canonical material ID.
+
 The client does not invoke `ssh-keygen` or an arbitrary helper. A signer may
 explicitly delegate an Ed25519 operation to the local agent by placing
 `NIX-SEAL-SSH-AGENT-ED25519-v1:<openssh-public-key>` in the selected signing-key
