@@ -4,6 +4,6 @@ __pycache__/
 /result
 *.age.tmp
 *.identity
-/.nix-seal/
-/.nix-seal.lock
+**/.nix-seal/
+**/.nix-seal.lock
 .pre-commit-config.yaml

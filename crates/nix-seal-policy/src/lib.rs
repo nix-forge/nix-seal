@@ -93,6 +93,8 @@ pub struct TargetPolicyV1 {
     pub recipient_identity: Id,
     /// Exact public age or plugin recipient from the plan.
     pub recipient: String,
+    /// Exact target-owned post-switch command policy.
+    pub service_actions: Option<nix_seal_core::TargetServiceActions>,
     /// Authorized secret policy keyed by secret ID.
     pub secrets: BTreeMap<Id, TargetSecretPolicyV1>,
     /// Templates whose complete secret dependency set is authorized.
@@ -263,6 +265,7 @@ pub fn validate(plan: &PlanV2) -> Result<(), PolicyError> {
             "plan object collections are limited to 10000 entries each".to_owned(),
         ));
     }
+    validate_authorization_namespace(plan)?;
     validate_group_graph(plan)?;
     if plan
         .identities
@@ -335,6 +338,36 @@ pub fn validate(plan: &PlanV2) -> Result<(), PolicyError> {
         validate_approval(id, policy, plan)?;
     }
     validate_generator_graph(plan)
+}
+
+fn validate_authorization_namespace(plan: &PlanV2) -> Result<(), PolicyError> {
+    for (left_name, left, right_name, right) in [
+        (
+            "identity",
+            plan.identities.keys().collect::<BTreeSet<_>>(),
+            "group",
+            plan.groups.keys().collect::<BTreeSet<_>>(),
+        ),
+        (
+            "identity",
+            plan.identities.keys().collect::<BTreeSet<_>>(),
+            "target",
+            plan.targets.keys().collect::<BTreeSet<_>>(),
+        ),
+        (
+            "group",
+            plan.groups.keys().collect::<BTreeSet<_>>(),
+            "target",
+            plan.targets.keys().collect::<BTreeSet<_>>(),
+        ),
+    ] {
+        if let Some(id) = left.intersection(&right).next() {
+            return Err(PolicyError::Violation(format!(
+                "authorization ID {id} is declared as both {left_name} and {right_name}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -509,6 +542,27 @@ fn validate_target(id: &Id, target: &nix_seal_core::Target) -> Result<(), Policy
         return Err(PolicyError::Violation(format!(
             "target {id} contains duplicate tags"
         )));
+    }
+    if let Some(actions) = &target.service_actions {
+        let executable = Path::new(&actions.executable);
+        if !executable.is_absolute()
+            || executable.components().any(|component| {
+                !matches!(
+                    component,
+                    std::path::Component::RootDir | std::path::Component::Normal(_)
+                )
+            })
+            || actions
+                .executable
+                .bytes()
+                .any(|byte| byte.is_ascii_control())
+            || actions.executable.len() > 16 * 1024
+            || !(1..=60).contains(&actions.timeout_seconds)
+        {
+            return Err(PolicyError::Violation(format!(
+                "target {id} has invalid post-switch command policy"
+            )));
+        }
     }
     Ok(())
 }
@@ -1544,6 +1598,7 @@ pub fn target_policy(plan: &PlanV2, target_id: &Id) -> Result<TargetPolicyV1, Po
         username: target.username.clone(),
         recipient_identity: target.identity.clone(),
         recipient: recipient_identity.public.clone(),
+        service_actions: target.service_actions.clone(),
         secrets,
         templates,
     })
@@ -1594,7 +1649,7 @@ mod tests {
     use super::*;
     use nix_seal_core::{
         ActivationPhase, DeliveryMode, Group, Identity, Lifecycle, RuntimeSettings, Secret, Target,
-        TargetKind, Template, TemplateEncoding, TemplatePlaceholder,
+        TargetKind, TargetServiceActions, Template, TemplateEncoding, TemplatePlaceholder,
     };
     use std::collections::BTreeMap;
     const RECIPIENT: &str = "age1ml79lp4sk2gz59n3xux5xhasg7p5qa0pnm634rd8pnw80avag4js2etr0l";
@@ -1620,6 +1675,41 @@ mod tests {
         assert!(!valid_store_executable(
             "/nix/store/abc123:unsafe/bin/generate"
         ));
+    }
+
+    #[test]
+    fn target_service_action_policy_is_absolute_normalized_and_bounded() -> Result<(), PolicyError>
+    {
+        let id = Id::parse("target").map_err(|error| PolicyError::Violation(error.to_string()))?;
+        let mut target = Target {
+            kind: TargetKind::NixOs,
+            system: "x86_64-linux".to_owned(),
+            identity: Id::parse("target-key")
+                .map_err(|error| PolicyError::Violation(error.to_string()))?,
+            username: None,
+            configuration: None,
+            environment: None,
+            tags: Vec::new(),
+            service_actions: Some(TargetServiceActions {
+                executable: "/nix/store/systemd/bin/systemctl".to_owned(),
+                timeout_seconds: 30,
+            }),
+        };
+        validate_target(&id, &target)?;
+        target
+            .service_actions
+            .as_mut()
+            .ok_or_else(|| PolicyError::Violation("missing service policy".to_owned()))?
+            .executable = "/nix/store/systemd/../bin/systemctl".to_owned();
+        assert!(validate_target(&id, &target).is_err());
+        let actions = target
+            .service_actions
+            .as_mut()
+            .ok_or_else(|| PolicyError::Violation("missing service policy".to_owned()))?;
+        actions.executable = "/nix/store/systemd/bin/systemctl".to_owned();
+        actions.timeout_seconds = 61;
+        assert!(validate_target(&id, &target).is_err());
+        Ok(())
     }
 
     #[test]
@@ -1861,6 +1951,66 @@ mod tests {
     }
 
     #[test]
+    fn authorization_ids_are_disjoint_across_identities_groups_and_targets()
+    -> Result<(), PolicyError> {
+        let id = Id::parse("shared").map_err(|error| PolicyError::Violation(error.to_string()))?;
+
+        let mut identity_group = PlanV2::default();
+        identity_group.identities.insert(
+            id.clone(),
+            Identity {
+                kind: IdentityKind::Administrator,
+                public: RECIPIENT.to_owned(),
+            },
+        );
+        identity_group.groups.insert(id.clone(), Group::default());
+        assert!(validate(&identity_group).is_err());
+
+        let mut group_target = PlanV2::default();
+        group_target.groups.insert(id.clone(), Group::default());
+        group_target.targets.insert(
+            id.clone(),
+            Target {
+                kind: TargetKind::NixOs,
+                system: "x86_64-linux".to_owned(),
+                identity: Id::parse("target-key")
+                    .map_err(|error| PolicyError::Violation(error.to_string()))?,
+                username: None,
+                configuration: None,
+                environment: None,
+                tags: Vec::new(),
+                service_actions: None,
+            },
+        );
+        assert!(validate(&group_target).is_err());
+
+        let mut identity_target = PlanV2::default();
+        identity_target.identities.insert(
+            id.clone(),
+            Identity {
+                kind: IdentityKind::Target,
+                public: RECIPIENT.to_owned(),
+            },
+        );
+        identity_target.targets.insert(
+            id,
+            Target {
+                kind: TargetKind::NixOs,
+                system: "x86_64-linux".to_owned(),
+                identity: Id::parse("target-key")
+                    .map_err(|error| PolicyError::Violation(error.to_string()))?,
+                username: None,
+                configuration: None,
+                environment: None,
+                tags: Vec::new(),
+                service_actions: None,
+            },
+        );
+        assert!(validate(&identity_target).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn property_canonical_hash_is_invariant_under_public_insertion_order() -> Result<(), PolicyError>
     {
         let mut forward = PlanV2::default();
@@ -1965,6 +2115,7 @@ mod tests {
                     configuration: None,
                     environment: None,
                     tags: vec!["prod".to_owned()],
+                    service_actions: None,
                 },
             );
             targets.push(target);
@@ -2051,6 +2202,7 @@ mod tests {
                 configuration: None,
                 environment: None,
                 tags: Vec::new(),
+                service_actions: None,
             },
         );
         plan.secrets.insert(
@@ -2217,6 +2369,28 @@ mod tests {
     }
 
     #[test]
+    fn native_and_openssh_signer_aliases_are_duplicates() -> Result<(), PolicyError> {
+        let mut plan = PlanV2::default();
+        for (name, public) in [
+            (
+                "native",
+                "nix-seal-ed25519-v1:sz6u836i33yqAQ3v3qNOJB9l8bUppPQ+0UMn9cVKq2I=",
+            ),
+            ("openssh", SSH_SIGNER),
+        ] {
+            plan.identities.insert(
+                Id::parse(name).map_err(|error| PolicyError::Violation(error.to_string()))?,
+                Identity {
+                    kind: IdentityKind::Signer,
+                    public: public.to_owned(),
+                },
+            );
+        }
+        assert!(validate(&plan).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn encryption_identities_require_a_valid_age_recipient() -> Result<(), PolicyError> {
         let mut plan = PlanV2::default();
         let id = Id::parse("administrator")
@@ -2233,6 +2407,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn target_selectors_expand_deterministically() -> Result<(), PolicyError> {
         let mut plan = PlanV2::default();
         let parse = |value: &str| {
@@ -2289,6 +2464,7 @@ mod tests {
                     configuration: Some("desktop".to_owned()),
                     environment: Some("prod".to_owned()),
                     tags,
+                    service_actions: None,
                 },
             );
         }
@@ -2539,6 +2715,7 @@ mod tests {
                     configuration: None,
                     environment: None,
                     tags: Vec::new(),
+                    service_actions: None,
                 },
             );
         }
@@ -2698,6 +2875,7 @@ mod tests {
                 configuration: None,
                 environment: None,
                 tags: Vec::new(),
+                service_actions: None,
             },
         );
         plan.groups.insert(

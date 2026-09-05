@@ -2672,6 +2672,15 @@ fn verify_service_projection(
         .post_switch
         .as_ref()
         .context("activation omits service actions required by target policy")?;
+    let command_policy = policy
+        .service_actions
+        .as_ref()
+        .context("target policy omits required post-switch command policy")?;
+    if actions.executable != Path::new(&command_policy.executable)
+        || actions.timeout_seconds != command_policy.timeout_seconds
+    {
+        bail!("activation service executable or timeout differs from canonical target policy");
+    }
     let expected_manager = match policy.target_kind {
         nix_seal_core::TargetKind::NixOs => nix_seal_runtime::ServiceManagerV1::SystemdSystem,
         nix_seal_core::TargetKind::Darwin => nix_seal_runtime::ServiceManagerV1::LaunchdSystem,
@@ -2718,6 +2727,7 @@ fn run_generate(arguments: &GenerateArgs, json: bool) -> Result<()> {
         plaintext: SecretBox<Vec<u8>>,
     }
 
+    reject_legacy_repository_prompt_state(&arguments.repository_root)?;
     let plan = read_plan_bounded(&arguments.plan)?;
     let identity = read_identity(&arguments.identity)?;
     let mut order = Vec::new();
@@ -2842,18 +2852,7 @@ fn run_generate(arguments: &GenerateArgs, json: bool) -> Result<()> {
             })
             .collect::<Vec<_>>();
         let generator_state_destination = generator_state_relative_path(&generator_id);
-        let (prompt_destinations, prompt_values_for_state) =
-            persistent_prompt_metadata(&generator_id, generator, &prompt_values)?;
-        let mut private_writes = prompt_destinations
-            .iter()
-            .zip(prompt_values_for_state.iter())
-            .map(
-                |(destination, value)| nix_seal_authoring::BatchPrivateWrite {
-                    relative_destination: destination.as_path(),
-                    plaintext: value,
-                },
-            )
-            .collect::<Vec<_>>();
+        let mut private_writes = Vec::new();
         let generator_state_bytes = generator.validation.as_deref().map(|validation| {
             serialize_generator_state(
                 &generator_id,
@@ -2891,6 +2890,12 @@ fn run_generate(arguments: &GenerateArgs, json: bool) -> Result<()> {
             &private_deletes,
             &identity,
             mode,
+        )?;
+        persist_generator_prompts(
+            &arguments.repository_root,
+            &generator_id,
+            generator,
+            &prompt_values,
         )?;
         for (output, result) in generated.iter().zip(results.secrets) {
             outputs.push(serde_json::json!({
@@ -3184,77 +3189,113 @@ fn remove_generator_state(repository_root: &Path, generator_id: &nix_seal_core::
     }
 }
 
-/// Resolves the owner-only repository state path for a persistent prompt.
+/// Resolves an owner-only, repository-keyed state path outside the repository.
 ///
 /// Prompt values are deliberately kept outside the public plan and outside
 /// canonical ciphertext. The private state tree is created component by
 /// component so an attacker cannot replace an ancestor with a symlink between
-/// runs. IDs are already validated by the policy layer and therefore provide
-/// safe relative components here.
+/// runs. Repository and prompt identifiers are domain-separated hashes, which
+/// also prevent path-component ambiguity between nested IDs.
 fn generator_prompt_state_path(
     repository_root: &Path,
     generator_id: &nix_seal_core::Id,
     prompt_id: &nix_seal_core::Id,
 ) -> Result<PathBuf> {
-    let root = repository_root
+    let configured = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from);
+    let state_home = if let Some(path) = configured {
+        if !path.is_absolute() {
+            bail!("XDG_STATE_HOME must be absolute for persistent prompt state");
+        }
+        path
+    } else {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .context("HOME or XDG_STATE_HOME is required for persistent prompt state")?;
+        if !home.is_absolute() {
+            bail!("HOME must be absolute for persistent prompt state");
+        }
+        home.join(".local/state")
+    };
+    generator_prompt_state_path_at(&state_home, repository_root, generator_id, prompt_id)
+}
+
+/// Refuses to proceed while plaintext prompt state from a pre-release layout
+/// still exists inside the repository. The check deliberately inspects only
+/// metadata: migration or deletion is an explicit operator action because the
+/// path can contain credentials and must not be copied implicitly.
+fn reject_legacy_repository_prompt_state(repository_root: &Path) -> Result<()> {
+    let legacy = repository_root.join(".nix-seal/prompt-state");
+    match fs::symlink_metadata(&legacy) {
+        Ok(_) => bail!(
+            "legacy plaintext prompt state exists below the repository; relocate or securely remove .nix-seal/prompt-state before any Nix evaluation or nix-seal generation"
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => bail!("could not safely inspect legacy repository prompt state"),
+    }
+}
+
+fn generator_prompt_state_path_at(
+    state_home: &Path,
+    repository_root: &Path,
+    generator_id: &nix_seal_core::Id,
+    prompt_id: &nix_seal_core::Id,
+) -> Result<PathBuf> {
+    let repository = repository_root
         .canonicalize()
         .context("repository root must exist for persistent prompt state")?;
-    let mut directory = root;
-    for component in [".nix-seal", "prompt-state", "v1"] {
+    fs::create_dir_all(state_home).context("could not create user state directory")?;
+    validate_private_state_parent(state_home)?;
+    let state_home = state_home
+        .canonicalize()
+        .context("could not canonicalize user state directory")?;
+    if state_home.starts_with(&repository) {
+        bail!("persistent prompt state directory must be outside the repository");
+    }
+    let mut final_path = state_home.clone();
+    final_path.push("nix-seal");
+    final_path.push("repositories");
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"nix-seal persistent prompt repository v1\0");
+    hasher.update(repository.as_os_str().as_encoded_bytes());
+    let repository_key = hasher.finalize().to_hex().to_string();
+    let generator_key = persistent_prompt_id_key("generator", generator_id);
+    let prompt_key = persistent_prompt_id_key("prompt", prompt_id);
+    final_path.push(&repository_key);
+    final_path.push("prompt-state");
+    final_path.push("v1");
+    final_path.push(&generator_key);
+    final_path.push(&prompt_key);
+    if final_path.starts_with(&repository) {
+        bail!("persistent prompt state path must be outside the repository");
+    }
+    let mut directory = state_home;
+    for component in ["nix-seal", "repositories"] {
         directory.push(component);
         ensure_private_directory(&directory)?;
     }
-    for component in generator_id.as_str().split('/') {
+    directory.push(repository_key);
+    ensure_private_directory(&directory)?;
+    for component in ["prompt-state", "v1"] {
         directory.push(component);
         ensure_private_directory(&directory)?;
     }
-    let mut prompt_components = prompt_id.as_str().split('/').peekable();
-    while let Some(component) = prompt_components.next() {
-        directory.push(component);
-        if prompt_components.peek().is_some() {
-            ensure_private_directory(&directory)?;
-        }
-    }
+    directory.push(generator_key);
+    ensure_private_directory(&directory)?;
+    directory.push(prompt_key);
     Ok(directory)
 }
 
-fn generator_prompt_state_relative_path(
-    generator_id: &nix_seal_core::Id,
-    prompt_id: &nix_seal_core::Id,
-) -> PathBuf {
-    PathBuf::from(".nix-seal")
-        .join("prompt-state")
-        .join("v1")
-        .join(generator_id.as_str())
-        .join(prompt_id.as_str())
-}
-
-fn persistent_prompt_metadata<'a>(
-    generator_id: &nix_seal_core::Id,
-    generator: &nix_seal_core::Generator,
-    prompt_values: &'a [SecretBox<Vec<u8>>],
-) -> Result<(Vec<PathBuf>, Vec<&'a [u8]>)> {
-    if prompt_values.len() != generator.prompts.len() {
-        bail!("generator prompt count changed during generation");
-    }
-    let mut destinations = Vec::new();
-    let mut values = Vec::new();
-    for (prompt, value) in generator.prompts.iter().zip(prompt_values) {
-        if prompt.persistent {
-            destinations.push(generator_prompt_state_relative_path(
-                generator_id,
-                &prompt.id,
-            ));
-            values.push(value.expose_secret().as_slice());
-        }
-    }
-    Ok((destinations, values))
+fn persistent_prompt_id_key(domain: &str, id: &nix_seal_core::Id) -> String {
+    let mut hasher = blake3::Hasher::new_derive_key("nix-seal persistent prompt ID v1");
+    hasher.update(domain.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(id.as_str().as_bytes());
+    hasher.finalize().to_hex().to_string()
 }
 
 /// Stores declared persistent prompts only after all generated ciphertext
 /// outputs have committed. A failed generation therefore cannot update the
 /// remembered response. The replacement is staged and durable before rename.
-#[cfg(test)]
 fn persist_generator_prompts(
     repository_root: &Path,
     generator_id: &nix_seal_core::Id,
@@ -3268,6 +3309,22 @@ fn persist_generator_prompts(
         if prompt.persistent {
             let path = generator_prompt_state_path(repository_root, generator_id, &prompt.id)?;
             write_private_bytes_atomic(&path, value.expose_secret())?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_private_state_parent(path: &Path) -> Result<()> {
+    let metadata =
+        fs::symlink_metadata(path).context("could not inspect persistent prompt state parent")?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        bail!("persistent prompt state parent has unsafe type");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o022 != 0 {
+            bail!("persistent prompt state parent has unsafe ownership or permissions");
         }
     }
     Ok(())
@@ -3293,7 +3350,6 @@ fn ensure_private_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
 fn write_private_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
@@ -3457,6 +3513,15 @@ fn generate_external_values(
     prompts: &[SecretBox<Vec<u8>>],
     secret_inputs: GeneratorSecretInputs<'_>,
 ) -> Result<GeneratedValues> {
+    // Resolve every executable search path before any prompt or secret is
+    // materialized. A lexical /nix/store spelling is not sufficient because
+    // an ancestor or final symlink can escape to mutable code.
+    let executable = resolve_generator_executable(Path::new(&generator.executable))?;
+    let runtime_directories = generator
+        .runtime_inputs
+        .iter()
+        .map(|input| resolve_generator_runtime_directory(&Path::new(input).join("bin")))
+        .collect::<Result<Vec<_>>>()?;
     let workspace = tempfile::Builder::new()
         .prefix("nix-seal-generator-")
         .tempdir()
@@ -3485,13 +3550,8 @@ fn generate_external_values(
         .context("could not create private generator secret directory")?;
     set_private_directory(&secret_directory)?;
     materialize_generator_secret_dependencies(generator, secret_inputs, &secret_directory)?;
-    let runtime_path = std::env::join_paths(
-        generator
-            .runtime_inputs
-            .iter()
-            .map(|input| Path::new(input).join("bin")),
-    )
-    .context("generator runtime inputs cannot form a safe PATH")?;
+    let runtime_path = std::env::join_paths(runtime_directories.iter())
+        .context("generator runtime inputs cannot form a safe PATH")?;
     let layout = GeneratorExecutionLayout {
         runtime_path: &runtime_path,
         workspace: workspace.path(),
@@ -3504,7 +3564,7 @@ fn generate_external_values(
         output_count: generator.outputs.len(),
         public_output_count: generator.public_outputs.len(),
     };
-    let mut child = spawn_external_generator(generator, &layout)?;
+    let mut child = spawn_external_generator(generator, &executable, &layout)?;
     let deadline = Instant::now() + Duration::from_secs(u64::from(generator.timeout_seconds));
     loop {
         match child
@@ -3629,6 +3689,7 @@ fn build_external_generator_command(
 #[allow(clippy::too_many_lines)]
 fn spawn_external_generator(
     generator: &nix_seal_core::Generator,
+    executable: &Path,
     layout: &GeneratorExecutionLayout<'_>,
 ) -> Result<Child> {
     let generator_args = generator
@@ -3646,7 +3707,7 @@ fn spawn_external_generator(
         worker
             .arg("__generator-worker")
             .arg("--executable")
-            .arg(&generator.executable)
+            .arg(executable)
             .arg("--workspace")
             .arg(layout.workspace)
             .arg("--output-directory")
@@ -3725,11 +3786,8 @@ fn spawn_external_generator(
                 eprintln!(
                     "warning: Linux network isolation was unavailable for this external generator; trust the declared executable and runtime inputs"
                 );
-                let mut direct = build_external_generator_command(
-                    Path::new(&generator.executable),
-                    &generator_args,
-                    layout,
-                );
+                let mut direct =
+                    build_external_generator_command(executable, &generator_args, layout);
                 isolate_child_process_group(&mut direct);
                 direct
                     .spawn()
@@ -3746,16 +3804,107 @@ fn spawn_external_generator(
         eprintln!(
             "warning: network isolation is unavailable on this platform for this external generator; trust the declared executable and runtime inputs"
         );
-        let mut direct = build_external_generator_command(
-            Path::new(&generator.executable),
-            &generator_args,
-            layout,
-        );
+        let mut direct = build_external_generator_command(executable, &generator_args, layout);
         isolate_child_process_group(&mut direct);
         direct
             .spawn()
             .context("could not start constrained generator")
     }
+}
+
+fn resolve_generator_executable(path: &Path) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        bail!("external generator executable must be absolute");
+    }
+    let canonical = path
+        .canonicalize()
+        .context("could not canonicalize external generator executable")?;
+    require_generator_store_path(&canonical)?;
+    let metadata = fs::symlink_metadata(&canonical)
+        .context("could not inspect external generator executable")?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        bail!("external generator executable must resolve to a regular file");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            bail!("external generator executable is not executable");
+        }
+    }
+    Ok(canonical)
+}
+
+fn resolve_generator_runtime_directory(path: &Path) -> Result<PathBuf> {
+    let canonical = path
+        .canonicalize()
+        .context("could not canonicalize generator runtime input bin directory")?;
+    require_generator_store_path(&canonical)?;
+    let metadata = fs::symlink_metadata(&canonical)
+        .context("could not inspect generator runtime input bin directory")?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        bail!("generator runtime input bin path must resolve to a directory");
+    }
+    #[cfg(not(test))]
+    validate_generator_runtime_entries(&canonical, Path::new("/nix/store"))?;
+    Ok(canonical)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn validate_generator_runtime_path(runtime_path: &OsStr) -> Result<()> {
+    // An omitted runtime input list deliberately produces an empty PATH.
+    // Empty components in a nonempty PATH would search the working directory.
+    if runtime_path.is_empty() {
+        return Ok(());
+    }
+    for directory in std::env::split_paths(runtime_path) {
+        if directory.as_os_str().is_empty()
+            || resolve_generator_runtime_directory(&directory)? != directory
+        {
+            bail!("generator runtime PATH is not canonical");
+        }
+    }
+    Ok(())
+}
+
+fn validate_generator_runtime_entries(directory: &Path, immutable_root: &Path) -> Result<()> {
+    let mut entries = 0_u64;
+    for entry in fs::read_dir(directory).context("could not enumerate generator runtime input")? {
+        entries = entries
+            .checked_add(1)
+            .context("generator runtime input entry count overflow")?;
+        if entries > 10_000 {
+            bail!("generator runtime input bin directory exceeds the 10000-entry safety limit");
+        }
+        let entry = entry.context("could not inspect generator runtime input entry")?;
+        let path = entry.path();
+        let canonical = path
+            .canonicalize()
+            .context("could not canonicalize generator runtime input entry")?;
+        require_path_below(&canonical, immutable_root, "generator runtime input entry")?;
+        let metadata = fs::symlink_metadata(&canonical)
+            .context("could not inspect resolved generator runtime input entry")?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            bail!("generator runtime input entries must resolve to regular files");
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn require_generator_store_path(path: &Path) -> Result<()> {
+    #[cfg(not(test))]
+    require_path_below(path, Path::new("/nix/store"), "external generator path")?;
+    #[cfg(test)]
+    let _ = path;
+    Ok(())
+}
+
+fn require_path_below(path: &Path, root: &Path, label: &str) -> Result<()> {
+    if !path.starts_with(root) || path == root {
+        bail!("{label} resolves outside its immutable root");
+    }
+    Ok(())
 }
 
 fn materialize_generator_secret_dependencies(
@@ -4408,11 +4557,14 @@ fn discover_activation_artifacts(
     let mut selected: BTreeMap<nix_seal_core::Id, DiscoveredActivationArtifact> = BTreeMap::new();
 
     for record in cache.artifact_records()? {
-        let envelope: nix_seal_manifest::SignedEnvelopeV1 =
-            serde_json::from_slice(&record.envelope)
-                .context("cached artifact envelope is not valid strict JSON")?;
-        let manifest = nix_seal_manifest::inspect_unverified(&envelope)
-            .context("cached artifact envelope has an invalid manifest")?;
+        let Ok(envelope) =
+            serde_json::from_slice::<nix_seal_manifest::SignedEnvelopeV1>(&record.envelope)
+        else {
+            continue;
+        };
+        let Ok(manifest) = nix_seal_manifest::inspect_unverified(&envelope) else {
+            continue;
+        };
         let Some(secret) = policy.secrets.get(&manifest.secret_id) else {
             continue;
         };
@@ -4425,7 +4577,7 @@ fn discover_activation_artifacts(
         {
             continue;
         }
-        let address = nix_seal_cache::ArtifactAddress::new(
+        let Ok(address) = nix_seal_cache::ArtifactAddress::new(
             &policy.plan_hash,
             &target_policy_hash,
             &secret.source_ciphertext_hash,
@@ -4433,9 +4585,11 @@ fn discover_activation_artifacts(
             policy.target_id.as_str(),
             manifest.secret_id.as_str(),
             manifest.artifact_generation,
-        )?;
-        if address.key()? != record.key {
-            bail!("cached artifact address does not match its signed binding");
+        ) else {
+            continue;
+        };
+        if address.key().ok().as_deref() != Some(record.key.as_str()) {
+            continue;
         }
         let mut trusted = nix_seal_manifest::TrustedKeys::new();
         for encoded in secret.approval.signers.values() {
@@ -4454,13 +4608,16 @@ fn discover_activation_artifacts(
             now,
             allowed_clock_skew,
         };
-        nix_seal_manifest::verify(
+        if nix_seal_manifest::verify(
             &envelope,
             &trusted,
             usize::from(secret.approval.threshold),
             &expected,
         )
-        .context("cached artifact failed signed binding verification")?;
+        .is_err()
+        {
+            continue;
+        }
 
         let candidate = DiscoveredActivationArtifact {
             ciphertext: record.ciphertext_path,
@@ -4723,11 +4880,12 @@ fn run_generator_worker_main(arguments: &GeneratorWorkerArgs) -> Result<()> {
         if !isolated {
             return Ok(());
         }
-        let executable = resolve_external_executable(&arguments.executable)?;
+        let executable = resolve_generator_executable(&arguments.executable)?;
         let runtime_path = arguments
             .runtime_path
             .as_deref()
             .unwrap_or_else(|| OsStr::new(""));
+        validate_generator_runtime_path(runtime_path)?;
         let layout = GeneratorExecutionLayout {
             runtime_path,
             workspace: &arguments.workspace,
@@ -5180,7 +5338,18 @@ fn write_bootstrap_secret(
 
 fn run_bootstrap_complete(arguments: &BootstrapCompleteArgs, json: bool) -> Result<()> {
     let plan = read_bootstrap_create_plan(&arguments.bootstrap_plan)?;
-    let _ = ensure_bootstrap_authorizer(&plan, &arguments.authorizer_key)?;
+    let authorizer = ensure_bootstrap_authorizer(&plan, &arguments.authorizer_key)?;
+    let mut challenge = b"nix-seal bootstrap completion possession v1\0".to_vec();
+    challenge.extend_from_slice(nix_seal_policy::plan_hash(&plan)?.as_bytes());
+    challenge.push(0);
+    challenge.extend_from_slice(arguments.secret.as_str().as_bytes());
+    let mut nonce = [0_u8; 32];
+    getrandom::fill(&mut nonce).context("could not obtain possession-proof randomness")?;
+    challenge.push(0);
+    challenge.extend_from_slice(&nonce);
+    authorizer
+        .prove_possession(&challenge)
+        .context("bootstrap authorizer private-key possession was not proved")?;
     let input = read_bootstrap_plaintext()?;
     write_bootstrap_secret(
         &plan,
@@ -5196,7 +5365,9 @@ fn run_delegated_issue(arguments: &DelegatedIssueArgs, json: bool) -> Result<()>
     if arguments.expires_in_seconds == 0 || arguments.expires_in_seconds > 900 {
         bail!("--expires-in-seconds must be between 1 and 900");
     }
-    if arguments.plaintext_bytes == 0 || arguments.plaintext_bytes > 64 * 1024 {
+    if arguments.plaintext_bytes == 0
+        || arguments.plaintext_bytes > nix_seal_manifest::MAX_DELEGATED_PLAINTEXT_BYTES
+    {
         bail!("--plaintext-bytes must be between 1 and 65536 for delegated creation");
     }
     let plan = read_bootstrap_create_plan(&arguments.bootstrap_plan)?;
@@ -5265,9 +5436,11 @@ fn run_delegated_create(arguments: &DelegatedCreateArgs, json: bool) -> Result<(
         bail!("capability does not match the plan-derived destination or recipients");
     }
     let mut input = Zeroizing::new(Vec::new());
-    std::io::stdin()
-        .take(capability.max_plaintext_bytes + 1)
-        .read_to_end(&mut input)?;
+    let read_limit = capability
+        .max_plaintext_bytes
+        .checked_add(1)
+        .context("delegated plaintext limit is invalid")?;
+    std::io::stdin().take(read_limit).read_to_end(&mut input)?;
     if input.is_empty() || input.len() as u64 > capability.max_plaintext_bytes {
         bail!("delegated plaintext is empty or exceeds the authorized byte limit");
     }
@@ -5688,7 +5861,9 @@ fn extract_collection_values(
     }
     let document: serde_json::Value = match format {
         SecretFormat::Json => serde_json::from_str(text).context("logical JSON is malformed")?,
-        SecretFormat::Toml => toml::from_str(text).context("logical TOML is malformed")?,
+        SecretFormat::Toml => {
+            toml::from_str(text).map_err(|_| anyhow::anyhow!("logical TOML is malformed"))?
+        }
         SecretFormat::Yaml => yaml_serde::from_str(text).context("logical YAML is malformed")?,
         SecretFormat::Dotenv => unreachable!(),
     };
@@ -5872,8 +6047,8 @@ fn validate_structured_secret_bytes(input: &[u8], format: Option<SecretFormat>) 
                 serde_json::from_str(text).context("structured JSON secret input is malformed")?;
         }
         SecretFormat::Toml => {
-            let _: toml::Value =
-                toml::from_str(text).context("structured TOML secret input is malformed")?;
+            let _: toml::Value = toml::from_str(text)
+                .map_err(|_| anyhow::anyhow!("structured TOML secret input is malformed"))?;
         }
         SecretFormat::Yaml => {
             let _: yaml_serde::Value =
@@ -7022,6 +7197,17 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
             validate_structured_secret_bytes(b"token: value\n", Some(SecretFormat::Yaml)).is_ok()
         );
         assert!(validate_structured_secret_bytes(b"token: [", Some(SecretFormat::Yaml)).is_err());
+
+        let canary = "NIX_SEAL_PRIVATE_TOML_CANARY";
+        let input = format!("token = \"{canary}\n");
+        let error = validate_structured_secret_bytes(input.as_bytes(), Some(SecretFormat::Toml))
+            .err()
+            .unwrap_or_else(|| unreachable!("malformed private TOML must fail"));
+        assert!(!format!("{error:#}").contains(canary));
+        let error = extract_collection_values(input.as_bytes(), SecretFormat::Toml, &[])
+            .err()
+            .unwrap_or_else(|| unreachable!("malformed private collection TOML must fail"));
+        assert!(!format!("{error:#}").contains(canary));
     }
 
     #[test]
@@ -7265,6 +7451,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
                 configuration: None,
                 environment: None,
                 tags: Vec::new(),
+                service_actions: None,
             },
         );
         plan.secrets.insert(
@@ -7488,6 +7675,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
                 configuration: None,
                 environment: None,
                 tags: Vec::new(),
+                service_actions: None,
             },
         );
         plan.secrets.insert(
@@ -7913,6 +8101,29 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
             },
             false,
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn migration_traversal_budget_counts_every_visited_entry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        migration_traversal_budget_rejects_entry_n_plus_one()?;
+        Ok(())
+    }
+
+    #[test]
+    fn agenix_migration_bounds_empty_directory_depth() -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path().canonicalize()?;
+        let mut directory = root.clone();
+        for _ in 0..33 {
+            directory.push("nested");
+        }
+        fs::create_dir_all(directory)?;
+        let error = scan_agenix_ciphertexts(&root, &root, &mut Vec::new())
+            .err()
+            .ok_or("deep directories must fail even without ciphertext leaves")?;
+        assert!(error.to_string().contains("path nesting exceeds"));
         Ok(())
     }
 
@@ -8395,106 +8606,91 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
     }
 
     #[test]
-    fn persistent_prompt_state_is_private_and_reused() -> Result<(), Box<dyn std::error::Error>> {
+    fn persistent_prompt_state_is_private_and_outside_nested_repository()
+    -> Result<(), Box<dyn std::error::Error>> {
         let temporary = tempfile::tempdir()?;
-        let repository = temporary.path().join("repository");
+        let repository = temporary.path().join("repository/nested");
         fs::create_dir_all(&repository)?;
+        let state_home = temporary.path().join("state");
         let generator_id = nix_seal_core::Id::parse("application/bootstrap")?;
         let prompt_id = nix_seal_core::Id::parse("database/password")?;
-        let generator = nix_seal_core::Generator {
-            executable: "/nix/store/example/bin/generator".to_owned(),
-            arguments: Vec::new(),
-            runtime_inputs: Vec::new(),
-            timeout_seconds: nix_seal_core::DEFAULT_GENERATOR_TIMEOUT_SECONDS,
-            max_output_bytes: nix_seal_core::DEFAULT_GENERATOR_MAX_OUTPUT_BYTES,
-            dependencies: Vec::new(),
-            secret_dependencies: Vec::new(),
-            outputs: vec![nix_seal_core::Id::parse("application/token")?],
-            public_outputs: Vec::new(),
-            prompts: vec![nix_seal_core::GeneratorPrompt {
-                id: prompt_id.clone(),
-                mode: nix_seal_core::GeneratorPromptMode::Hidden,
-                message: "Database password".to_owned(),
-                multiline: false,
-                persistent: true,
-            }],
-            parameters: BTreeMap::new(),
-            validation: None,
-        };
-        let mut plan = nix_seal_core::PlanV2::default();
-        plan.generators
-            .insert(generator_id.clone(), generator.clone());
-        let value = SecretBox::new(Box::new(b"persistent-prompt".to_vec()));
-        persist_generator_prompts(&repository, &generator_id, &generator, &[value])?;
-        let path = generator_prompt_state_path(&repository, &generator_id, &prompt_id)?;
+        let path =
+            generator_prompt_state_path_at(&state_home, &repository, &generator_id, &prompt_id)?;
+        write_private_bytes_atomic(&path, b"persistent-prompt")?;
         let metadata = fs::metadata(&path)?;
         assert!(metadata.is_file());
+        assert!(path.starts_with(state_home.canonicalize()?));
+        assert!(!path.starts_with(&repository));
+        assert!(!repository.join(".nix-seal").exists());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(metadata.permissions().mode() & 0o077, 0);
         }
-        let files = validate_generator_prompt_files(
-            &plan,
-            std::slice::from_ref(&generator_id),
-            &[],
+        let colliding_spelling = generator_prompt_state_path_at(
+            &state_home,
             &repository,
-            false,
+            &nix_seal_core::Id::parse("application")?,
+            &nix_seal_core::Id::parse("bootstrap/database/password")?,
         )?;
-        let restored = read_generator_prompts(&generator, &files)?;
-        assert_eq!(restored[0].expose_secret(), b"persistent-prompt");
+        assert_ne!(path, colliding_spelling);
         Ok(())
     }
 
     #[test]
-    fn persistent_prompt_metadata_preserves_nonpersistent_prompt_alignment()
+    fn legacy_repository_prompt_state_blocks_generation_preflight()
     -> Result<(), Box<dyn std::error::Error>> {
-        let generator_id = nix_seal_core::Id::parse("application/bootstrap")?;
-        let ephemeral_id = nix_seal_core::Id::parse("bootstrap/ephemeral")?;
-        let persistent_id = nix_seal_core::Id::parse("bootstrap/persistent")?;
-        let generator = nix_seal_core::Generator {
-            executable: "/nix/store/example/bin/generator".to_owned(),
-            arguments: Vec::new(),
-            runtime_inputs: Vec::new(),
-            timeout_seconds: nix_seal_core::DEFAULT_GENERATOR_TIMEOUT_SECONDS,
-            max_output_bytes: nix_seal_core::DEFAULT_GENERATOR_MAX_OUTPUT_BYTES,
-            dependencies: Vec::new(),
-            secret_dependencies: Vec::new(),
-            outputs: vec![nix_seal_core::Id::parse("application/token")?],
-            public_outputs: Vec::new(),
-            prompts: vec![
-                nix_seal_core::GeneratorPrompt {
-                    id: ephemeral_id,
-                    mode: nix_seal_core::GeneratorPromptMode::Hidden,
-                    message: "Ephemeral".to_owned(),
-                    multiline: false,
-                    persistent: false,
-                },
-                nix_seal_core::GeneratorPrompt {
-                    id: persistent_id.clone(),
-                    mode: nix_seal_core::GeneratorPromptMode::Hidden,
-                    message: "Persistent".to_owned(),
-                    multiline: false,
-                    persistent: true,
-                },
-            ],
-            parameters: BTreeMap::new(),
-            validation: None,
+        let temporary = tempfile::tempdir()?;
+        let repository = temporary.path().join("repository");
+        fs::create_dir_all(repository.join(".nix-seal/prompt-state/v1"))?;
+
+        let Err(error) = reject_legacy_repository_prompt_state(&repository) else {
+            return Err(std::io::Error::other(
+                "repository-local plaintext state did not block generation",
+            )
+            .into());
         };
-        let prompt_values = vec![
-            SecretBox::new(Box::new(b"ephemeral-value".to_vec())),
-            SecretBox::new(Box::new(b"persistent-value".to_vec())),
-        ];
-        let (destinations, values) =
-            persistent_prompt_metadata(&generator_id, &generator, &prompt_values)?;
-        assert_eq!(
-            destinations,
-            vec![generator_prompt_state_relative_path(
-                &generator_id,
-                &persistent_id
-            )]
-        );
-        assert_eq!(values, vec![b"persistent-value".as_slice()]);
+        assert!(error.to_string().contains("legacy plaintext prompt state"));
+
+        fs::remove_dir_all(repository.join(".nix-seal/prompt-state"))?;
+        reject_legacy_repository_prompt_state(&repository)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_generator_paths_cannot_escape_the_immutable_root()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir()?;
+        let store = temporary.path().join("store");
+        let package = store.join("package/bin");
+        fs::create_dir_all(&package)?;
+        let store = store.canonicalize()?;
+        let executable = package.join("generate");
+        fs::write(&executable, b"generator")?;
+        require_path_below(&executable.canonicalize()?, &store, "test generator")?;
+
+        let outside = temporary.path().join("mutable-generator");
+        fs::write(&outside, b"mutable")?;
+        let escaped = package.join("escaped");
+        symlink(&outside, &escaped)?;
+        assert!(require_path_below(&escaped.canonicalize()?, &store, "test generator").is_err());
+        assert!(validate_generator_runtime_entries(&package, &store).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn generator_runtime_path_accepts_no_inputs_but_rejects_empty_components()
+    -> Result<(), Box<dyn std::error::Error>> {
+        validate_generator_runtime_path(OsStr::new(""))?;
+        let temporary = tempfile::tempdir()?;
+        let directory = temporary.path().canonicalize()?;
+        let runtime_path = std::env::join_paths([&directory])?;
+        validate_generator_runtime_path(&runtime_path)?;
+        let unsafe_path = std::env::join_paths([directory.as_path(), Path::new("")])?;
+        assert!(validate_generator_runtime_path(&unsafe_path).is_err());
         Ok(())
     }
 
@@ -9143,6 +9339,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
                 configuration: None,
                 environment: None,
                 tags: Vec::new(),
+                service_actions: None,
             },
         );
         plan.secrets.insert(
@@ -9364,6 +9561,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
                 configuration: None,
                 environment: None,
                 tags: Vec::new(),
+                service_actions: None,
             },
         );
         plan.secrets.insert(
@@ -9436,6 +9634,137 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
             .push("changed".to_owned());
         let stale = authenticated_gc_retention(&cache, &plan, &repository_root)?;
         assert!(stale.artifact_keys.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn unrelated_malformed_cache_envelopes_do_not_block_discovery()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let cache_root = temporary.path().join("cache");
+        let cache = nix_seal_cache::Cache::open(cache_root.clone())?;
+        let address = nix_seal_cache::ArtifactAddress::new(
+            "0".repeat(64),
+            "1".repeat(64),
+            "2".repeat(64),
+            "3".repeat(64),
+            "unrelated",
+            "unrelated/secret",
+            1,
+        )?;
+        cache.put_artifact(
+            &address,
+            b"ciphertext".as_slice(),
+            b"private-canary-not-json",
+        )?;
+
+        let (_, recipient) = nix_seal_crypto::generate_x25519();
+        let identity_id = nix_seal_core::Id::parse("target-key")?;
+        let target_id = nix_seal_core::Id::parse("target")?;
+        let mut plan = nix_seal_core::PlanV2::default();
+        plan.identities.insert(
+            identity_id.clone(),
+            nix_seal_core::Identity {
+                kind: nix_seal_core::IdentityKind::Target,
+                public: recipient,
+            },
+        );
+        plan.targets.insert(
+            target_id.clone(),
+            nix_seal_core::Target {
+                kind: nix_seal_core::TargetKind::NixOs,
+                system: "x86_64-linux".to_owned(),
+                identity: identity_id,
+                username: None,
+                configuration: None,
+                environment: None,
+                tags: Vec::new(),
+                service_actions: None,
+            },
+        );
+        let policy = nix_seal_policy::target_policy(&plan, &target_id)?;
+        assert!(
+            discover_activation_artifacts(
+                &cache_root,
+                &policy,
+                nix_seal_core::ActivationPhase::Activation,
+                1,
+                0,
+            )?
+            .is_empty()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn service_projection_binds_executable_and_timeout() -> Result<(), Box<dyn std::error::Error>> {
+        let target_id = nix_seal_core::Id::parse("target")?;
+        let secret_id = nix_seal_core::Id::parse("service/token")?;
+        let identity_id = nix_seal_core::Id::parse("target-key")?;
+        let runtime = nix_seal_core::RuntimeSettings {
+            restart_units: vec!["application.service".to_owned()],
+            ..nix_seal_core::RuntimeSettings::default()
+        };
+        let policy = nix_seal_policy::TargetPolicyV1 {
+            schema: nix_seal_policy::TARGET_POLICY_SCHEMA.to_owned(),
+            plan_hash: "0".repeat(64),
+            target_id: target_id.clone(),
+            target_kind: nix_seal_core::TargetKind::NixOs,
+            system: "x86_64-linux".to_owned(),
+            username: None,
+            recipient_identity: identity_id,
+            recipient: "age1test".to_owned(),
+            service_actions: Some(nix_seal_core::TargetServiceActions {
+                executable: "/nix/store/systemd/bin/systemctl".to_owned(),
+                timeout_seconds: 30,
+            }),
+            secrets: BTreeMap::from([(
+                secret_id,
+                nix_seal_policy::TargetSecretPolicyV1 {
+                    source: "secrets/token.age".to_owned(),
+                    source_ciphertext_hash: "1".repeat(64),
+                    delivery: nix_seal_core::DeliveryMode::Rekeyed,
+                    phase: nix_seal_core::ActivationPhase::Activation,
+                    runtime,
+                    approval: nix_seal_policy::TargetApprovalPolicyV1 {
+                        threshold: 1,
+                        signers: BTreeMap::new(),
+                    },
+                },
+            )]),
+            templates: BTreeMap::new(),
+        };
+        let actions = nix_seal_runtime::PostSwitchSpecV1 {
+            executable: PathBuf::from("/nix/store/systemd/bin/systemctl"),
+            manager: nix_seal_runtime::ServiceManagerV1::SystemdSystem,
+            reload_units: Vec::new(),
+            restart_units: vec!["application.service".to_owned()],
+            timeout_seconds: 30,
+        };
+        let mut spec = nix_seal_runtime::ActivationSpecV2 {
+            schema: nix_seal_runtime::ACTIVATION_SCHEMA.to_owned(),
+            runtime_root: PathBuf::from("/run/nix-seal"),
+            runtime_storage: nix_seal_runtime::RuntimeStorageV1::Persistent,
+            runtime_generation: None,
+            plan: PathBuf::from("/nix/store/plan"),
+            artifact_cache_root: PathBuf::from("/var/lib/nix-seal/cache"),
+            target_id,
+            phase: nix_seal_core::ActivationPhase::Activation,
+            allowed_clock_skew: 0,
+            artifacts: Vec::new(),
+            templates: Vec::new(),
+            post_switch: Some(actions),
+        };
+        verify_service_projection(&spec, &policy)?;
+        spec.post_switch
+            .as_mut()
+            .ok_or("missing actions")?
+            .timeout_seconds = 31;
+        assert!(verify_service_projection(&spec, &policy).is_err());
+        let actions = spec.post_switch.as_mut().ok_or("missing actions")?;
+        actions.timeout_seconds = 30;
+        actions.executable = PathBuf::from("/nix/store/other/bin/systemctl");
+        assert!(verify_service_projection(&spec, &policy).is_err());
         Ok(())
     }
 }

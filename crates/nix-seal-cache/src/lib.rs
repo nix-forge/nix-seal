@@ -13,6 +13,9 @@ use thiserror::Error;
 
 const MAX_CIPHERTEXT_BYTES: u64 = 70 * 1024 * 1024;
 const MAX_ENVELOPE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_TRANSFER_ENTRIES: u64 = 10_000;
+const MAX_TRANSFER_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_INVENTORY_ENVELOPE_BYTES: u64 = 64 * 1024 * 1024;
 const ARTIFACT_FORMAT: &str = "nix-seal.cache-artifact.v2";
 const TRANSACTION_PREFIX: &str = ".nix-seal-txn-";
 
@@ -260,11 +263,17 @@ impl Cache {
     }
     /// Atomically stores bytes under their digest while holding the cache lock.
     pub fn put(&self, bytes: &[u8]) -> Result<String, CacheError> {
+        let lock = self.lock()?;
+        let result = self.put_unlocked(bytes);
+        FileExt::unlock(&lock)?;
+        result
+    }
+
+    fn put_unlocked(&self, bytes: &[u8]) -> Result<String, CacheError> {
         if u64::try_from(bytes.len()).map_err(|_| CacheError::Limit)? > MAX_CIPHERTEXT_BYTES {
             return Err(CacheError::Limit);
         }
         let digest = Self::digest(bytes);
-        let lock = self.lock()?;
         let objects = self.root.join("objects");
         ensure_private_directory(&objects)?;
         let destination = objects.join(&digest);
@@ -286,7 +295,6 @@ impl Cache {
             }
             Err(error) => return Err(error.into()),
         }
-        FileExt::unlock(&lock)?;
         Ok(digest)
     }
     /// Reads and verifies an object.
@@ -360,10 +368,89 @@ impl Cache {
         if source.root.canonicalize()? == self.root.canonicalize()? {
             return Err(CacheError::UnsafeMetadata);
         }
-        source.copy_into_unlocked(self)
+        // Snapshot and fully validate the foreign-owned exchange before the
+        // destination is touched. Limits, malformed entries, and late
+        // conflicts therefore cannot leave an attacker-controlled partial
+        // import behind.
+        let staging_directory = TempDir::new()?;
+        set_private_permissions(staging_directory.path(), true)?;
+        let staging = Cache::open(staging_directory.path().join("cache"))?;
+        let report = source.copy_into_unlocked(&staging)?;
+        let destination_lock = self.lock()?;
+        let commit = (|| {
+            // Revalidate while holding one destination-wide lock so another
+            // writer cannot introduce a late conflict between preflight and
+            // publication.
+            staging.preflight_destination(self)?;
+            staging.copy_into_unlocked_destination(self)
+        })();
+        FileExt::unlock(&destination_lock)?;
+        commit?;
+        Ok(report)
+    }
+
+    fn preflight_destination(&self, destination: &Cache) -> Result<(), CacheError> {
+        for directory in [
+            destination.root.join("objects"),
+            destination.root.join("artifacts"),
+        ] {
+            match std::fs::symlink_metadata(directory) {
+                Ok(metadata) => destination.validate_private_metadata(&metadata, true)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let objects = self.root.join("objects");
+        if let Some(entries) = read_directory_if_present(&objects)? {
+            for entry in entries {
+                let entry = entry?;
+                let digest = entry
+                    .file_name()
+                    .to_str()
+                    .ok_or(CacheError::UnsafeMetadata)?
+                    .to_owned();
+                let _ = self.get(&digest)?;
+                let destination_path = destination.root.join("objects").join(&digest);
+                match std::fs::symlink_metadata(&destination_path) {
+                    Ok(_) => {
+                        let _ = destination.get(&digest)?;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+        for record in self.artifact_records()? {
+            let destination_path = destination.root.join("artifacts").join(&record.key);
+            match std::fs::symlink_metadata(&destination_path) {
+                Ok(_) => {
+                    let existing = destination.load_artifact_by_key(&record.key)?;
+                    if existing.artifact_ciphertext_hash != record.artifact_ciphertext_hash
+                        || existing.envelope != record.envelope
+                    {
+                        return Err(CacheError::Conflict);
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
     }
 
     fn put_artifact_by_key<R: Read>(
+        &self,
+        key: String,
+        ciphertext: R,
+        envelope: &[u8],
+    ) -> Result<ArtifactRecord, CacheError> {
+        let lock = self.lock()?;
+        let result = self.put_artifact_by_key_unlocked(key, ciphertext, envelope);
+        FileExt::unlock(&lock)?;
+        result
+    }
+
+    fn put_artifact_by_key_unlocked<R: Read>(
         &self,
         key: String,
         ciphertext: R,
@@ -375,11 +462,9 @@ impl Cache {
         if envelope.len() > MAX_ENVELOPE_BYTES {
             return Err(CacheError::Limit);
         }
-        let lock = self.lock()?;
         let artifacts = self.artifacts_directory()?;
         let destination = artifacts.join(&key);
         if destination.exists() {
-            FileExt::unlock(&lock)?;
             return Err(CacheError::ArtifactExists);
         }
 
@@ -404,7 +489,6 @@ impl Cache {
             return Err(error);
         }
         File::open(&artifacts)?.sync_all()?;
-        FileExt::unlock(&lock)?;
 
         Ok(ArtifactRecord {
             key,
@@ -433,6 +517,24 @@ impl Cache {
     }
 
     fn copy_into_unlocked(&self, destination: &Cache) -> Result<CacheTransferReport, CacheError> {
+        self.copy_into_unlocked_with(destination, false)
+    }
+
+    fn copy_into_unlocked_destination(
+        &self,
+        destination: &Cache,
+    ) -> Result<CacheTransferReport, CacheError> {
+        self.copy_into_unlocked_with(destination, true)
+    }
+
+    fn copy_into_unlocked_with(
+        &self,
+        destination: &Cache,
+        destination_is_locked: bool,
+    ) -> Result<CacheTransferReport, CacheError> {
+        // Reject an oversized exchange from metadata alone before hashing,
+        // allocating, or publishing any attacker-controlled content.
+        self.preflight_transfer_limits()?;
         let mut report = CacheTransferReport::default();
         let objects = self.root.join("objects");
         if let Some(entries) = read_directory_if_present(&objects)? {
@@ -443,28 +545,54 @@ impl Cache {
                     .to_str()
                     .ok_or(CacheError::UnsafeMetadata)?
                     .to_owned();
-                let bytes = self.get(&digest)?;
-                let destination_digest = destination.put(&bytes)?;
-                if destination_digest != digest {
-                    return Err(CacheError::HashMismatch);
+                if !is_digest(&digest) {
+                    return Err(CacheError::UnsafeMetadata);
                 }
                 report.object_count = report
                     .object_count
                     .checked_add(1)
                     .ok_or(CacheError::Limit)?;
-                report.bytes = report
-                    .bytes
-                    .checked_add(u64::try_from(bytes.len()).map_err(|_| CacheError::Limit)?)
-                    .ok_or(CacheError::Limit)?;
+                enforce_transfer_entry_limit(report.object_count, report.artifact_count)?;
+                let expected_length = self.file_length(&entry.path())?;
+                report.bytes = checked_transfer_bytes(report.bytes, expected_length)?;
+                let bytes = self.get(&digest)?;
+                if u64::try_from(bytes.len()).map_err(|_| CacheError::Limit)? != expected_length {
+                    return Err(CacheError::Conflict);
+                }
+                let destination_digest = if destination_is_locked {
+                    destination.put_unlocked(&bytes)?
+                } else {
+                    destination.put(&bytes)?
+                };
+                if destination_digest != digest {
+                    return Err(CacheError::HashMismatch);
+                }
             }
         }
-        for record in self.artifact_records()? {
-            let ciphertext_bytes = self.file_length(&record.ciphertext_path)?;
-            match destination.put_artifact_by_key(
-                record.key.clone(),
-                self.open_private_regular(&record.ciphertext_path)?,
-                &record.envelope,
-            ) {
+        for key in self.artifact_keys()? {
+            report.artifact_count = report
+                .artifact_count
+                .checked_add(1)
+                .ok_or(CacheError::Limit)?;
+            enforce_transfer_entry_limit(report.object_count, report.artifact_count)?;
+            let (_, _, ciphertext_bytes, envelope_bytes) = self.artifact_layout(&key)?;
+            report.bytes = checked_transfer_bytes(report.bytes, ciphertext_bytes)?;
+            report.bytes = checked_transfer_bytes(report.bytes, envelope_bytes)?;
+            let record = self.load_artifact_by_key(&key)?;
+            let imported = if destination_is_locked {
+                destination.put_artifact_by_key_unlocked(
+                    record.key.clone(),
+                    self.open_private_regular(&record.ciphertext_path)?,
+                    &record.envelope,
+                )
+            } else {
+                destination.put_artifact_by_key(
+                    record.key.clone(),
+                    self.open_private_regular(&record.ciphertext_path)?,
+                    &record.envelope,
+                )
+            };
+            match imported {
                 Ok(imported)
                     if imported.artifact_ciphertext_hash == record.artifact_ciphertext_hash => {}
                 Ok(_) => return Err(CacheError::Conflict),
@@ -478,15 +606,6 @@ impl Cache {
                 }
                 Err(error) => return Err(error),
             }
-            report.artifact_count = report
-                .artifact_count
-                .checked_add(1)
-                .ok_or(CacheError::Limit)?;
-            report.bytes = checked_transfer_bytes(report.bytes, ciphertext_bytes)?;
-            report.bytes = checked_transfer_bytes(
-                report.bytes,
-                u64::try_from(record.envelope.len()).map_err(|_| CacheError::Limit)?,
-            )?;
         }
         Ok(report)
     }
@@ -570,23 +689,20 @@ impl Cache {
     /// Envelope signatures are intentionally not interpreted by the cache; the
     /// policy layer must authenticate them before treating a record as active.
     pub fn artifact_records(&self) -> Result<Vec<ArtifactRecord>, CacheError> {
-        let artifacts = self.root.join("artifacts");
-        let Some(entries) = read_directory_if_present(&artifacts)? else {
-            return Ok(Vec::new());
-        };
-        let mut keys = BTreeSet::new();
-        for entry in entries {
-            let entry = entry?;
-            let name = entry.file_name();
-            let key = name.to_str().ok_or(CacheError::UnsafeMetadata)?;
-            if !is_digest(key) {
-                return Err(CacheError::UnsafeMetadata);
+        let keys = self.artifact_keys()?;
+        let mut records = Vec::with_capacity(keys.len());
+        let mut envelope_bytes = 0_u64;
+        for key in keys {
+            let record = self.load_artifact_by_key(&key)?;
+            envelope_bytes = envelope_bytes
+                .checked_add(u64::try_from(record.envelope.len()).map_err(|_| CacheError::Limit)?)
+                .ok_or(CacheError::Limit)?;
+            if envelope_bytes > MAX_INVENTORY_ENVELOPE_BYTES {
+                return Err(CacheError::Limit);
             }
-            keys.insert(key.to_owned());
+            records.push(record);
         }
-        keys.into_iter()
-            .map(|key| self.load_artifact_by_key(&key))
-            .collect()
+        Ok(records)
     }
 
     /// Validates all entries, reports unreachable candidates, and optionally removes them.
@@ -740,6 +856,44 @@ impl Cache {
     }
 
     fn load_artifact_by_key(&self, key: &str) -> Result<ArtifactRecord, CacheError> {
+        let (ciphertext_path, envelope_path, _, _) = self.artifact_layout(key)?;
+        let artifact_ciphertext_hash = copy_and_hash_bounded(
+            self.open_private_regular(&ciphertext_path)?,
+            std::io::sink(),
+            MAX_CIPHERTEXT_BYTES,
+        )?;
+        let mut envelope_file = self.open_private_regular(&envelope_path)?;
+        let envelope = read_bounded(&mut envelope_file, MAX_ENVELOPE_BYTES as u64)?;
+        Ok(ArtifactRecord {
+            key: key.to_owned(),
+            artifact_ciphertext_hash,
+            envelope,
+            ciphertext_path,
+            envelope_path,
+        })
+    }
+
+    fn artifact_keys(&self) -> Result<BTreeSet<String>, CacheError> {
+        let artifacts = self.root.join("artifacts");
+        let Some(entries) = read_directory_if_present(&artifacts)? else {
+            return Ok(BTreeSet::new());
+        };
+        let mut keys = BTreeSet::new();
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name();
+            let key = name.to_str().ok_or(CacheError::UnsafeMetadata)?;
+            if !is_digest(key) || !keys.insert(key.to_owned()) {
+                return Err(CacheError::UnsafeMetadata);
+            }
+            if u64::try_from(keys.len()).map_err(|_| CacheError::Limit)? > MAX_TRANSFER_ENTRIES {
+                return Err(CacheError::Limit);
+            }
+        }
+        Ok(keys)
+    }
+
+    fn artifact_layout(&self, key: &str) -> Result<(PathBuf, PathBuf, u64, u64), CacheError> {
         if !is_digest(key) {
             return Err(CacheError::InvalidAddress);
         }
@@ -758,20 +912,56 @@ impl Cache {
         }
         let ciphertext_path = directory.join("ciphertext.age");
         let envelope_path = directory.join("manifest.dsse.json");
-        let artifact_ciphertext_hash = copy_and_hash_bounded(
-            self.open_private_regular(&ciphertext_path)?,
-            std::io::sink(),
-            MAX_CIPHERTEXT_BYTES,
-        )?;
-        let mut envelope_file = self.open_private_regular(&envelope_path)?;
-        let envelope = read_bounded(&mut envelope_file, MAX_ENVELOPE_BYTES as u64)?;
-        Ok(ArtifactRecord {
-            key: key.to_owned(),
-            artifact_ciphertext_hash,
-            envelope,
+        let ciphertext_bytes = self.file_length(&ciphertext_path)?;
+        let envelope_bytes = self.file_length(&envelope_path)?;
+        if ciphertext_bytes > MAX_CIPHERTEXT_BYTES || envelope_bytes > MAX_ENVELOPE_BYTES as u64 {
+            return Err(CacheError::Limit);
+        }
+        Ok((
             ciphertext_path,
             envelope_path,
-        })
+            ciphertext_bytes,
+            envelope_bytes,
+        ))
+    }
+
+    fn preflight_transfer_limits(&self) -> Result<(), CacheError> {
+        let mut object_count = 0_u64;
+        let mut artifact_count = 0_u64;
+        let mut bytes = 0_u64;
+        let objects = self.root.join("objects");
+        if let Some(entries) = read_directory_if_present(&objects)? {
+            for entry in entries {
+                let entry = entry?;
+                let name = entry.file_name();
+                let digest = name.to_str().ok_or(CacheError::UnsafeMetadata)?;
+                if !is_digest(digest) {
+                    return Err(CacheError::UnsafeMetadata);
+                }
+                object_count = object_count.checked_add(1).ok_or(CacheError::Limit)?;
+                enforce_transfer_entry_limit(object_count, artifact_count)?;
+                let length = self.file_length(&entry.path())?;
+                if length > MAX_CIPHERTEXT_BYTES {
+                    return Err(CacheError::Limit);
+                }
+                bytes = checked_transfer_bytes(bytes, length)?;
+            }
+        }
+        let mut envelope_bytes = 0_u64;
+        for key in self.artifact_keys()? {
+            artifact_count = artifact_count.checked_add(1).ok_or(CacheError::Limit)?;
+            enforce_transfer_entry_limit(object_count, artifact_count)?;
+            let (_, _, ciphertext_length, envelope_length) = self.artifact_layout(&key)?;
+            bytes = checked_transfer_bytes(bytes, ciphertext_length)?;
+            bytes = checked_transfer_bytes(bytes, envelope_length)?;
+            envelope_bytes = envelope_bytes
+                .checked_add(envelope_length)
+                .ok_or(CacheError::Limit)?;
+            if envelope_bytes > MAX_INVENTORY_ENVELOPE_BYTES {
+                return Err(CacheError::Limit);
+            }
+        }
+        Ok(())
     }
 
     fn validate_private_metadata(
@@ -811,7 +1001,18 @@ impl Cache {
 }
 
 fn checked_transfer_bytes(total: u64, additional: u64) -> Result<u64, CacheError> {
-    total.checked_add(additional).ok_or(CacheError::Limit)
+    let total = total.checked_add(additional).ok_or(CacheError::Limit)?;
+    if total > MAX_TRANSFER_BYTES {
+        return Err(CacheError::Limit);
+    }
+    Ok(total)
+}
+
+fn enforce_transfer_entry_limit(objects: u64, artifacts: u64) -> Result<(), CacheError> {
+    if objects.checked_add(artifacts).ok_or(CacheError::Limit)? > MAX_TRANSFER_ENTRIES {
+        return Err(CacheError::Limit);
+    }
+    Ok(())
 }
 
 /// Publishes a newly-created cache entry without ever replacing an existing
@@ -1217,6 +1418,45 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_transfer_quotas_reject_entry_and_byte_n_plus_one() {
+        assert!(enforce_transfer_entry_limit(MAX_TRANSFER_ENTRIES, 0).is_ok());
+        assert!(enforce_transfer_entry_limit(MAX_TRANSFER_ENTRIES, 1).is_err());
+        assert_eq!(
+            checked_transfer_bytes(0, MAX_TRANSFER_BYTES)
+                .unwrap_or_else(|error| unreachable!("{error}")),
+            MAX_TRANSFER_BYTES
+        );
+        assert!(checked_transfer_bytes(MAX_TRANSFER_BYTES, 1).is_err());
+    }
+
+    #[test]
+    fn transfer_rejects_aggregate_size_from_metadata_before_hashing() -> Result<(), CacheError> {
+        let temporary = tempfile::tempdir()?;
+        let source = Cache::open(temporary.path().join("source"))?;
+        let destination = Cache::open(temporary.path().join("destination"))?;
+        let objects = source.root().join("objects");
+        std::fs::create_dir_all(&objects)?;
+        set_private_permissions(&objects, true)?;
+
+        let entry_count = MAX_TRANSFER_BYTES / MAX_CIPHERTEXT_BYTES + 1;
+        for index in 0..entry_count {
+            // Sparse, deliberately hash-mismatched files prove the aggregate
+            // metadata limit fires before any source object is read or hashed.
+            let path = objects.join(format!("{index:064x}"));
+            let file = File::create(&path)?;
+            file.set_len(MAX_CIPHERTEXT_BYTES)?;
+            set_private_permissions(&path, false)?;
+        }
+
+        assert!(matches!(
+            source.copy_into(&destination),
+            Err(CacheError::Limit)
+        ));
+        assert_eq!(destination.inventory()?, CacheInventory::default());
+        Ok(())
+    }
+
+    #[test]
     fn put_rejects_oversized_generic_objects_before_publication() -> Result<(), CacheError> {
         let temp = tempfile::tempdir()?;
         let cache = Cache::open(temp.path())?;
@@ -1509,6 +1749,9 @@ mod tests {
             conflicting.import_from(&exchange),
             Err(CacheError::Conflict)
         ));
+        let inventory = conflicting.inventory()?;
+        assert_eq!(inventory.object_count, 0);
+        assert_eq!(inventory.artifact_count, 1);
         Ok(())
     }
 

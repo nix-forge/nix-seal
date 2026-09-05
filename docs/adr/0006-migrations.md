@@ -3,6 +3,12 @@
 Status: accepted; dry-run inventory, verified single-file streaming, and
 side-by-side age-tree and agenix-rekey migration implemented
 
+All recursive inventories share a 10000-entry traversal budget, counting
+directories and unrelated files as well as matching leaves. Directory depth is
+bounded before recursion, including trees with no ciphertext leaves. This
+prevents rejected or empty trees from exhausting memory or the call stack before
+the public inventory limit can apply.
+
 Migration is dry-run-first, preserves the source manager, streams plaintext into
 native age encryption, verifies every result by round trip, and supports
 side-by-side runtime directories. The initial implementation inventories

@@ -1361,6 +1361,9 @@ fn trusted_service_executable(
         .executable
         .canonicalize()
         .map_err(|_| RuntimeError::ServiceAction(unit.to_owned()))?;
+    if canonical.file_name().and_then(|name| name.to_str()) != Some(expected_name) {
+        return Err(RuntimeError::ServiceAction(unit.to_owned()));
+    }
     let protected_path = match actions.manager {
         ServiceManagerV1::SystemdSystem | ServiceManagerV1::SystemdUser => {
             canonical.starts_with("/nix/store")

@@ -27,6 +27,13 @@ then creates the ciphertext in one process. It avoids a plaintext hash, byte
 count, and temporary capability file. The delegated capability flow remains
 available when authorization and creation are deliberately separated.
 
+Completion verifies a fresh random possession challenge before accepting
+plaintext. The challenge binds the plan and secret, and uses a separate SSH
+signature namespace so an agent descriptor containing only a public key cannot
+authorize creation without the corresponding agent signing operation. Delegated
+capability payloads enforce a 64 KiB plaintext ceiling during signing and
+verification, including capabilities created outside the CLI.
+
 The authorizer role is separate from artifact approval. Offline bearer
 capabilities cannot support immediate global revocation, so expiry is limited
 to 15 minutes and single-use receipt storage is mandatory.

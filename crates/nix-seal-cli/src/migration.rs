@@ -371,7 +371,7 @@ pub(super) fn migrate_ciphertext(
     } else {
         nix_seal_authoring::WriteMode::Create
     };
-    let result = nix_seal_authoring::rekey_secret_with_identities(
+    let result = nix_seal_authoring::rekey_migration_secret_with_identities(
         repository_root,
         source,
         destination,
@@ -1156,7 +1156,7 @@ pub(super) fn migrate_agenix_tree(
                 },
             )
             .collect::<Vec<_>>();
-        let results = nix_seal_authoring::rekey_secret_batch_with_identities(
+        let results = nix_seal_authoring::rekey_migration_secret_batch_with_identities(
             &repository_root,
             &writes,
             &source_identity,
@@ -1249,7 +1249,7 @@ pub(super) fn migrate_agenix_rekey_export(
         .master_recipients
         .iter()
         .map(|recipient| {
-            nix_seal_crypto::normalize_recipient(recipient)
+            nix_seal_crypto::normalize_migration_recipient(recipient)
                 .context("agenix-rekey master recipient is unsupported")
         })
         .collect::<Result<BTreeSet<_>>>()?;
@@ -1327,7 +1327,7 @@ pub(super) fn migrate_agenix_rekey_export(
                     }
                 })
                 .collect::<Vec<_>>();
-            let results = nix_seal_authoring::rekey_secret_batch_with_identities(
+            let results = nix_seal_authoring::rekey_migration_secret_batch_with_identities(
                 &repository_root,
                 &writes,
                 &source_identity,
@@ -1441,18 +1441,17 @@ pub(super) fn scan_agenix_ciphertexts(
     directory: &Path,
     output: &mut Vec<PathBuf>,
 ) -> Result<()> {
-    if output.len() > 10_000 {
-        bail!("agenix ciphertext tree exceeds the 10000-file safety limit");
-    }
-    let mut entries = fs::read_dir(directory)
-        .with_context(|| {
-            format!(
-                "could not read ciphertext directory {}",
-                directory.display()
-            )
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by_key(std::fs::DirEntry::file_name);
+    let mut budget = MigrationTraversalBudget::new("agenix ciphertext");
+    scan_agenix_ciphertexts_bounded(root, directory, output, &mut budget)
+}
+
+fn scan_agenix_ciphertexts_bounded(
+    root: &Path,
+    directory: &Path,
+    output: &mut Vec<PathBuf>,
+    budget: &mut MigrationTraversalBudget,
+) -> Result<()> {
+    let entries = read_migration_directory_bounded(directory, budget)?;
     for entry in entries {
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path)?;
@@ -1460,7 +1459,10 @@ pub(super) fn scan_agenix_ciphertexts(
             bail!("agenix ciphertext tree contains a symlink");
         }
         if metadata.file_type().is_dir() {
-            scan_agenix_ciphertexts(root, &path, output)?;
+            if path.strip_prefix(root)?.components().count() > 32 {
+                bail!("agenix ciphertext path nesting exceeds the safety limit");
+            }
+            scan_agenix_ciphertexts_bounded(root, &path, output, budget)?;
         } else if metadata.file_type().is_file() {
             if path.extension().is_some_and(|extension| extension == "age") {
                 let relative = path.strip_prefix(root)?;
@@ -1561,13 +1563,17 @@ pub(super) fn scan_sops_json_files(
     directory: &Path,
     output: &mut Vec<SopsJsonInventory>,
 ) -> Result<()> {
-    if output.len() >= 10_000 {
-        bail!("SOPS JSON tree exceeds the 10000-file safety limit");
-    }
-    let mut entries = fs::read_dir(directory)
-        .with_context(|| format!("could not read SOPS JSON directory {}", directory.display()))?
-        .collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by_key(fs::DirEntry::file_name);
+    let mut budget = MigrationTraversalBudget::new("SOPS JSON");
+    scan_sops_json_files_bounded(root, directory, output, &mut budget)
+}
+
+fn scan_sops_json_files_bounded(
+    root: &Path,
+    directory: &Path,
+    output: &mut Vec<SopsJsonInventory>,
+    budget: &mut MigrationTraversalBudget,
+) -> Result<()> {
+    let entries = read_migration_directory_bounded(directory, budget)?;
     for entry in entries {
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path)?;
@@ -1579,7 +1585,7 @@ pub(super) fn scan_sops_json_files(
             if relative.components().count() > 32 {
                 bail!("SOPS JSON path nesting exceeds the safety limit");
             }
-            scan_sops_json_files(root, &path, output)?;
+            scan_sops_json_files_bounded(root, &path, output, budget)?;
         } else if metadata.file_type().is_file() {
             if path
                 .extension()
@@ -1655,7 +1661,7 @@ pub(super) fn inspect_sops_json(path: &Path) -> Result<SopsJsonInventory> {
                     .and_then(|entry| entry.get("recipient"))
                     .and_then(serde_json::Value::as_str)
                     .context("SOPS JSON age metadata lacks a recipient")?;
-                nix_seal_crypto::normalize_recipient(recipient)
+                nix_seal_crypto::normalize_migration_recipient(recipient)
                     .context("SOPS JSON age metadata has an invalid recipient")?;
             }
             age_recipient_count = entries.len();
@@ -1908,13 +1914,18 @@ pub(super) fn scan_clan_vars_files(
     values: &mut Vec<ClanVarInventory>,
     auxiliary_files: &mut u64,
 ) -> Result<()> {
-    if values.len() >= 10_000 || *auxiliary_files >= 10_000 {
-        bail!("Clan Vars tree exceeds the 10000-file safety limit");
-    }
-    let mut entries = fs::read_dir(directory)
-        .with_context(|| format!("could not read Clan Vars directory {}", directory.display()))?
-        .collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by_key(fs::DirEntry::file_name);
+    let mut budget = MigrationTraversalBudget::new("Clan Vars");
+    scan_clan_vars_files_bounded(root, directory, values, auxiliary_files, &mut budget)
+}
+
+fn scan_clan_vars_files_bounded(
+    root: &Path,
+    directory: &Path,
+    values: &mut Vec<ClanVarInventory>,
+    auxiliary_files: &mut u64,
+    budget: &mut MigrationTraversalBudget,
+) -> Result<()> {
+    let entries = read_migration_directory_bounded(directory, budget)?;
     for entry in entries {
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path)?;
@@ -1926,7 +1937,7 @@ pub(super) fn scan_clan_vars_files(
             bail!("Clan Vars path nesting exceeds the documented layout");
         }
         if metadata.file_type().is_dir() {
-            scan_clan_vars_files(root, &path, values, auxiliary_files)?;
+            scan_clan_vars_files_bounded(root, &path, values, auxiliary_files, budget)?;
         } else if metadata.file_type().is_file() {
             if entry.file_name() == "value" && relative.components().count() == 4 {
                 values.push(inspect_clan_var_value(&path, relative)?);
@@ -2012,8 +2023,8 @@ pub(super) fn migrate_clan_facts_tree(
             .canonicalize()
             .context("could not resolve Clan Facts root")?
     };
-    let mut entries = fs::read_dir(&root)?.collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by_key(fs::DirEntry::file_name);
+    let mut budget = MigrationTraversalBudget::new("Clan Facts");
+    let entries = read_migration_directory_bounded(&root, &mut budget)?;
     let mut facts = Vec::new();
     for machine in entries {
         let machine_path = machine.path();
@@ -2036,8 +2047,7 @@ pub(super) fn migrate_clan_facts_tree(
         if facts_metadata.file_type().is_symlink() || !facts_metadata.file_type().is_dir() {
             bail!("Clan Facts machine facts path must be a non-symlink directory");
         }
-        let mut leaves = fs::read_dir(&facts_root)?.collect::<Result<Vec<_>, _>>()?;
-        leaves.sort_by_key(fs::DirEntry::file_name);
+        let leaves = read_migration_directory_bounded(&facts_root, &mut budget)?;
         for leaf in leaves {
             if facts.len() >= 10_000 {
                 bail!("Clan Facts tree exceeds the 10000-file safety limit");
@@ -2172,6 +2182,60 @@ pub(super) fn migrate_clan_facts_tree(
         }
     }
     Ok(())
+}
+
+const MAX_MIGRATION_TRAVERSAL_ENTRIES: u64 = 10_000;
+
+struct MigrationTraversalBudget {
+    visited: u64,
+    label: &'static str,
+}
+
+impl MigrationTraversalBudget {
+    const fn new(label: &'static str) -> Self {
+        Self { visited: 0, label }
+    }
+
+    fn consume(&mut self) -> Result<()> {
+        self.visited = self
+            .visited
+            .checked_add(1)
+            .context("migration traversal entry count overflow")?;
+        if self.visited > MAX_MIGRATION_TRAVERSAL_ENTRIES {
+            bail!(
+                "{} tree exceeds the 10000-entry traversal safety limit",
+                self.label
+            );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(super) fn migration_traversal_budget_rejects_entry_n_plus_one() -> Result<()> {
+    let mut budget = MigrationTraversalBudget::new("test");
+    for _ in 0..MAX_MIGRATION_TRAVERSAL_ENTRIES {
+        budget.consume()?;
+    }
+    if budget.consume().is_ok() {
+        bail!("migration traversal budget accepted entry N+1");
+    }
+    Ok(())
+}
+
+fn read_migration_directory_bounded(
+    directory: &Path,
+    budget: &mut MigrationTraversalBudget,
+) -> Result<Vec<fs::DirEntry>> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(directory)
+        .with_context(|| format!("could not read migration directory {}", directory.display()))?
+    {
+        budget.consume()?;
+        entries.push(entry?);
+    }
+    entries.sort_by_key(fs::DirEntry::file_name);
+    Ok(entries)
 }
 
 pub(super) fn migrated_id(value: &str) -> Result<nix_seal_core::Id> {

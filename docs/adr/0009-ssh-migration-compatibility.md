@@ -6,11 +6,14 @@ Status: accepted with a temporary upstream advisory exception
 ciphertext without a separate scripting runtime. The pinned `age` crate's `ssh`
 feature is therefore enabled only in `nix-seal-crypto`.
 
-Native X25519 age recipients and reviewed age plugins remain the default and the
-only supported choices for new plans. OpenSSH comments are normalized away
-before authorization comparison or fingerprinting. The non-interactive CLI
-accepts only unencrypted OpenSSH identities; it rejects encrypted identities
-instead of presenting a prompt or attempting agent integration.
+Native X25519 age recipients and reviewed age plugins remain the default.
+OpenSSH Ed25519 remains supported for interoperability, with comments
+normalized away before authorization comparison or fingerprinting. OpenSSH RSA
+is rejected by normal plan, encryption, decryption, reveal, and rekey paths. It
+is accepted only as the source identity of an explicit migration operation;
+replacement recipients and the round-trip verification identity must be
+non-RSA. The non-interactive CLI rejects encrypted OpenSSH identities instead
+of presenting a prompt or attempting agent integration.
 
 The `ssh` feature brings in RustCrypto `rsa` for legacy OpenSSH RSA support.
 That crate is subject to unfixed `RUSTSEC-2023-0071` (Marvin timing attack).
@@ -19,7 +22,7 @@ available and dropping the feature would break the required migration path. The
 compensating controls are:
 
 - The tool has no network listener, daemon, or remote decryption API.
-- RSA is never generated or recommended for new configurations.
+- RSA cannot enter new plans or new ciphertext recipient sets.
 - No encrypted SSH key is prompted for or passed to a background process.
 - SSH support is assessed on every `age` or `rsa` update and must be removed or
   redesigned before any network-facing secret provider is introduced.

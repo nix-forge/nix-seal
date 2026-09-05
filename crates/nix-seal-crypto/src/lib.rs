@@ -167,9 +167,11 @@ pub fn recipient_from_identity(identity: &secrecy::SecretString) -> Result<Strin
         return Err(CryptoError::PluginIdentityPublic);
     }
     let parsed = parse_ssh_identity(identity)?;
-    age::ssh::Recipient::try_from(parsed)
-        .map(|recipient| recipient.to_string())
-        .map_err(|_| CryptoError::Identity)
+    let recipient = age::ssh::Recipient::try_from(parsed).map_err(|_| CryptoError::Identity)?;
+    if matches!(recipient, age::ssh::Recipient::SshRsa(..)) {
+        return Err(CryptoError::Identity);
+    }
+    Ok(recipient.to_string())
 }
 
 /// Parses an accepted recipient and returns its canonical serialized form.
@@ -177,16 +179,35 @@ pub fn recipient_from_identity(identity: &secrecy::SecretString) -> Result<Strin
 /// This deliberately removes an OpenSSH public-key comment before policy
 /// comparison and fingerprinting, because comments are not key material.
 pub fn normalize_recipient(recipient: &str) -> Result<String, CryptoError> {
+    normalize_recipient_inner(recipient, false)
+}
+
+/// Parses a recipient found in legacy migration-source metadata.
+///
+/// This compatibility-only parser recognizes SSH RSA so migrations can
+/// inventory old ciphertext. It must not be used for replacement recipients
+/// or normal plan validation.
+pub fn normalize_migration_recipient(recipient: &str) -> Result<String, CryptoError> {
+    normalize_recipient_inner(recipient, true)
+}
+
+fn normalize_recipient_inner(
+    recipient: &str,
+    allow_legacy_ssh_rsa: bool,
+) -> Result<String, CryptoError> {
     if let Ok(parsed) = recipient.parse::<age::x25519::Recipient>() {
         return Ok(parsed.to_string());
     }
     if let Ok(parsed) = recipient.parse::<age::plugin::Recipient>() {
         return Ok(parsed.to_string());
     }
-    recipient
+    let parsed = recipient
         .parse::<age::ssh::Recipient>()
-        .map(|parsed| parsed.to_string())
-        .map_err(|_| CryptoError::Recipient)
+        .map_err(|_| CryptoError::Recipient)?;
+    if !allow_legacy_ssh_rsa && matches!(parsed, age::ssh::Recipient::SshRsa(..)) {
+        return Err(CryptoError::Recipient);
+    }
+    Ok(parsed.to_string())
 }
 
 /// Returns whether an identity is a plugin identity for the supplied plugin
@@ -292,7 +313,30 @@ pub fn decrypt<R: Read + Send, W: Write>(
         );
     }
     let parsed = parse_identity(identity)?;
-    decrypt_with_identity(input, output, parsed.as_ref())
+    decrypt_with_identity(input, output, parsed.as_ref(), false)
+}
+
+/// Decrypts a legacy migration source, including SSH RSA identities.
+///
+/// This compatibility boundary must not be used by normal plan, activation,
+/// reveal, or authoring paths.
+pub fn decrypt_migration<R: Read + Send, W: Write>(
+    input: R,
+    output: W,
+    identity: &secrecy::SecretString,
+) -> Result<(), CryptoError> {
+    if is_plugin_identity(identity) {
+        return run_plugin_operation(
+            &PluginOperation::DecryptMigration {
+                identity: Some(identity),
+                recipients: &[],
+            },
+            input,
+            output,
+        );
+    }
+    let parsed = parse_migration_identity(identity)?;
+    decrypt_with_identity(input, output, parsed.as_ref(), true)
 }
 
 fn parse_recipient(value: &str) -> Result<Box<dyn Recipient + Send>, CryptoError> {
@@ -309,13 +353,41 @@ fn parse_recipient(value: &str) -> Result<Box<dyn Recipient + Send>, CryptoError
         .map_err(|_| CryptoError::Plugin)?;
         return Ok(Box::new(plugin));
     }
-    value
+    let recipient = value
         .parse::<age::ssh::Recipient>()
-        .map(|recipient| Box::new(recipient) as Box<dyn Recipient + Send>)
-        .map_err(|_| CryptoError::Recipient)
+        .map_err(|_| CryptoError::Recipient)?;
+    if matches!(recipient, age::ssh::Recipient::SshRsa(..)) {
+        return Err(CryptoError::Recipient);
+    }
+    Ok(Box::new(recipient))
 }
 
 fn parse_identity(
+    identity: &secrecy::SecretString,
+) -> Result<Box<dyn Identity + Send>, CryptoError> {
+    if let Ok(parsed) = identity
+        .expose_secret()
+        .trim()
+        .parse::<age::x25519::Identity>()
+    {
+        return Ok(Box::new(parsed));
+    }
+    if is_plugin_identity(identity) {
+        return parse_plugin_identity(identity);
+    }
+    let parsed = parse_ssh_identity(identity)?;
+    if matches!(&parsed, age::ssh::Identity::Encrypted(_)) {
+        return Err(CryptoError::Identity);
+    }
+    let recipient =
+        age::ssh::Recipient::try_from(parsed.clone()).map_err(|_| CryptoError::Identity)?;
+    if matches!(recipient, age::ssh::Recipient::SshRsa(..)) {
+        return Err(CryptoError::Identity);
+    }
+    Ok(Box::new(parsed))
+}
+
+fn parse_migration_identity(
     identity: &secrecy::SecretString,
 ) -> Result<Box<dyn Identity + Send>, CryptoError> {
     if let Ok(parsed) = identity
@@ -376,7 +448,9 @@ fn decrypt_with_identity<R: Read, W: Write>(
     input: R,
     mut output: W,
     identity: &dyn Identity,
+    allow_legacy_ssh_rsa_stanzas: bool,
 ) -> Result<(), CryptoError> {
+    let input = prepare_ciphertext(input, allow_legacy_ssh_rsa_stanzas)?;
     let decryptor = Decryptor::new(input).map_err(|_| CryptoError::Decrypt)?;
     let mut reader = decryptor
         .decrypt(std::iter::once(identity))
@@ -392,11 +466,26 @@ fn decrypt_with_identity<R: Read, W: Write>(
 
 /// Parses and bounds a standard age ciphertext header without decrypting plaintext.
 pub fn validate_ciphertext_header<R: Read>(input: R) -> Result<(), CryptoError> {
+    let input = prepare_ciphertext(input, true)?;
+    Decryptor::new(input).map_err(|_| CryptoError::Decrypt)?;
+    Ok(())
+}
+
+fn prepare_ciphertext<R: Read>(
+    input: R,
+    allow_legacy_ssh_rsa_stanzas: bool,
+) -> Result<std::io::Chain<Cursor<Vec<u8>>, BufReader<R>>, CryptoError> {
     let mut reader = BufReader::new(input);
     let header = read_age_header(&mut reader)?;
     validate_age_header_structure(&header)?;
-    Decryptor::new(Cursor::new(header).chain(reader)).map_err(|_| CryptoError::Decrypt)?;
-    Ok(())
+    if !allow_legacy_ssh_rsa_stanzas
+        && header
+            .split_inclusive(|byte| *byte == b'\n')
+            .any(|line| line.starts_with(b"-> ssh-rsa "))
+    {
+        return Err(CryptoError::Decrypt);
+    }
+    Ok(Cursor::new(header).chain(reader))
 }
 
 fn read_age_header<R: BufRead>(reader: &mut R) -> Result<Vec<u8>, CryptoError> {
@@ -448,16 +537,17 @@ fn validate_age_header_structure(ciphertext: &[u8]) -> Result<(), CryptoError> {
             // terminating line required for a body whose encoded length is a
             // multiple of 64. Treating that line as malformed made otherwise
             // valid age output fail nondeterministically.
-            if (line.is_empty() && !grease_stanza)
-                || line.starts_with(b"->")
+            if line.starts_with(b"->")
                 || line.starts_with(b"---")
-                || (!long_body_stanza && line.len() >= 64)
+                || line.len() > 64
+                || (!long_body_stanza && line.len() == 64)
             {
                 return Err(CryptoError::Decrypt);
             }
-            if !grease_stanza {
-                expects_body = false;
+            if long_body_stanza && line.len() == 64 {
+                continue;
             }
+            expects_body = false;
             continue;
         }
         if let Some(stanza) = line.strip_prefix(b"-> ") {
@@ -466,7 +556,7 @@ fn validate_age_header_structure(ciphertext: &[u8]) -> Result<(), CryptoError> {
                 Some(b"X25519") => fields.len() == 2,
                 Some(b"ssh-ed25519") => fields.len() == 3,
                 Some(tag) if tag.ends_with(b"-grease") => true,
-                Some(_) => fields.len() >= 2,
+                Some(_) => true,
                 None => false,
             };
             if !valid_fields || fields.iter().any(|value| value.is_empty()) {
@@ -475,8 +565,7 @@ fn validate_age_header_structure(ciphertext: &[u8]) -> Result<(), CryptoError> {
             stanza_count = stanza_count
                 .checked_add(1)
                 .ok_or(CryptoError::InputTooLarge)?;
-            long_body_stanza = fields.first() == Some(&b"ssh-rsa".as_slice())
-                || fields.first().is_some_and(|tag| tag.ends_with(b"-grease"));
+            long_body_stanza = !matches!(fields.first().copied(), Some(b"X25519" | b"ssh-ed25519"));
             grease_stanza = fields.first().is_some_and(|tag| tag.ends_with(b"-grease"));
             expects_body = true;
             continue;
@@ -511,6 +600,28 @@ pub fn rekey<R: Read + Send, W: Write>(
     rekey_direct(input, output, identity, recipients)
 }
 
+/// Rekeys a legacy migration source, permitting SSH RSA only for decryption.
+/// Destination recipients still pass the normal RSA-rejecting parser.
+pub fn rekey_migration<R: Read + Send, W: Write>(
+    input: R,
+    output: W,
+    identity: &secrecy::SecretString,
+    recipients: &[String],
+) -> Result<(), CryptoError> {
+    if is_plugin_identity(identity) || recipients.iter().any(|value| is_plugin_recipient(value)) {
+        return run_plugin_operation(
+            &PluginOperation::RekeyMigration {
+                identity: Some(identity),
+                recipients,
+            },
+            input,
+            output,
+        );
+    }
+    let identity = parse_migration_identity(identity)?;
+    rekey_direct_with_identity(input, output, identity.as_ref(), recipients, true)
+}
+
 fn rekey_direct<R: Read, W: Write>(
     input: R,
     output: W,
@@ -518,6 +629,16 @@ fn rekey_direct<R: Read, W: Write>(
     recipients: &[String],
 ) -> Result<(), CryptoError> {
     let identity = parse_identity(identity)?;
+    rekey_direct_with_identity(input, output, identity.as_ref(), recipients, false)
+}
+
+fn rekey_direct_with_identity<R: Read, W: Write>(
+    input: R,
+    output: W,
+    identity: &dyn Identity,
+    recipients: &[String],
+    allow_legacy_ssh_rsa_stanzas: bool,
+) -> Result<(), CryptoError> {
     let recipients = recipients
         .iter()
         .map(|value| parse_recipient(value))
@@ -526,9 +647,10 @@ fn rekey_direct<R: Read, W: Write>(
         return Err(CryptoError::Recipient);
     }
 
+    let input = prepare_ciphertext(input, allow_legacy_ssh_rsa_stanzas)?;
     let decryptor = Decryptor::new(input).map_err(|_| CryptoError::Decrypt)?;
     let mut plaintext = decryptor
-        .decrypt(std::iter::once(identity.as_ref() as &dyn Identity))
+        .decrypt(std::iter::once(identity))
         .map_err(|_| CryptoError::Decrypt)?;
     let encryptor = Encryptor::with_recipients(
         recipients
@@ -565,6 +687,14 @@ enum PluginOperation<'a> {
         identity: Option<&'a secrecy::SecretString>,
         recipients: &'a [String],
     },
+    RekeyMigration {
+        identity: Option<&'a secrecy::SecretString>,
+        recipients: &'a [String],
+    },
+    DecryptMigration {
+        identity: Option<&'a secrecy::SecretString>,
+        recipients: &'a [String],
+    },
 }
 
 impl PluginOperation<'_> {
@@ -573,6 +703,8 @@ impl PluginOperation<'_> {
             Self::Encrypt { .. } => 1,
             Self::Decrypt { .. } => 2,
             Self::Rekey { .. } => 3,
+            Self::RekeyMigration { .. } => 4,
+            Self::DecryptMigration { .. } => 5,
         }
     }
 
@@ -580,7 +712,9 @@ impl PluginOperation<'_> {
         match self {
             Self::Encrypt { identity, .. }
             | Self::Decrypt { identity, .. }
-            | Self::Rekey { identity, .. } => *identity,
+            | Self::Rekey { identity, .. }
+            | Self::RekeyMigration { identity, .. }
+            | Self::DecryptMigration { identity, .. } => *identity,
         }
     }
 
@@ -588,21 +722,28 @@ impl PluginOperation<'_> {
         match self {
             Self::Encrypt { recipients, .. }
             | Self::Decrypt { recipients, .. }
-            | Self::Rekey { recipients, .. } => recipients,
+            | Self::Rekey { recipients, .. }
+            | Self::RekeyMigration { recipients, .. }
+            | Self::DecryptMigration { recipients, .. } => recipients,
         }
     }
 
     const fn input_limit(&self) -> u64 {
         match self {
             Self::Encrypt { .. } => MAX_SECRET_BYTES,
-            Self::Decrypt { .. } | Self::Rekey { .. } => MAX_PLUGIN_CIPHERTEXT_BYTES,
+            Self::Decrypt { .. }
+            | Self::Rekey { .. }
+            | Self::RekeyMigration { .. }
+            | Self::DecryptMigration { .. } => MAX_PLUGIN_CIPHERTEXT_BYTES,
         }
     }
 
     const fn output_limit(&self) -> u64 {
         match self {
-            Self::Encrypt { .. } | Self::Rekey { .. } => MAX_PLUGIN_CIPHERTEXT_BYTES,
-            Self::Decrypt { .. } => MAX_SECRET_BYTES,
+            Self::Encrypt { .. } | Self::Rekey { .. } | Self::RekeyMigration { .. } => {
+                MAX_PLUGIN_CIPHERTEXT_BYTES
+            }
+            Self::Decrypt { .. } | Self::DecryptMigration { .. } => MAX_SECRET_BYTES,
         }
     }
 }
@@ -629,6 +770,8 @@ pub fn run_plugin_worker_protocol<R: Read, W: Write>(
         1 => 1,
         2 => 2,
         3 => 3,
+        4 => 4,
+        5 => 5,
         _ => return Err(CryptoError::Plugin),
     };
     let identity = read_plugin_field(&mut input, true)?.map(secrecy::SecretString::from);
@@ -645,11 +788,36 @@ pub fn run_plugin_worker_protocol<R: Read, W: Write>(
         1 => encrypt_direct(&mut input, &mut output, &recipients),
         2 => {
             let identity = identity.as_ref().ok_or(CryptoError::Plugin)?;
-            decrypt_with_identity(&mut input, &mut output, parse_identity(identity)?.as_ref())
+            decrypt_with_identity(
+                &mut input,
+                &mut output,
+                parse_identity(identity)?.as_ref(),
+                false,
+            )
         }
         3 => {
             let identity = identity.as_ref().ok_or(CryptoError::Plugin)?;
             rekey_direct(&mut input, &mut output, identity, &recipients)
+        }
+        4 => {
+            let identity = identity.as_ref().ok_or(CryptoError::Plugin)?;
+            let identity = parse_migration_identity(identity)?;
+            rekey_direct_with_identity(
+                &mut input,
+                &mut output,
+                identity.as_ref(),
+                &recipients,
+                true,
+            )
+        }
+        5 => {
+            let identity = identity.as_ref().ok_or(CryptoError::Plugin)?;
+            decrypt_with_identity(
+                &mut input,
+                &mut output,
+                parse_migration_identity(identity)?.as_ref(),
+                true,
+            )
         }
         _ => Err(CryptoError::Plugin),
     }
@@ -982,6 +1150,7 @@ mod tests {
     };
 
     const SSH_ED25519_RECIPIENT: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHsKLqeplhpW+uObz5dvMgjz1OxfM/XXUB+VHtZ6isGN alice@rust";
+    const SSH_RSA_RECIPIENT: &str = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDP6FSk7JCvOfd9k3Yo/F4F49/rVbtMIQd7jxJdDVONiStUUKkIUhvLfayNGg4hamL9gV7U24tJPohNWVsMBOMtRwKn2VAj5qIJhEFiaaf1dcjduYIQFH9mSXNX6E8Vq69qQYVgpGsJGz+jzdh08mwonePY8dV8JZ8A+sAqCTVuAHHUBCLISvJaGuBugJR4n1EIT78mBjpnEhlttz7SuBB+gRj+1QLkmdtQxBFC6tsBm8UvlAbRGvntjcc4g6DHbhQZQ/KuDNVN08iQ+BDdmvuJawufkM4XpnusLX2YCZcbmwCcP0ycWLkKStgFWcQYTF16Gf+EUpBQZZ1wJG8kzGjd";
     const SUPPORTED_CCTV_VECTOR_COUNT: u16 = 48;
     const SSH_ED25519_IDENTITY_ARMOR: &str = "-----BEGIN_OPENSSH_PRIVATE_KEY-----\n\
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
@@ -992,18 +1161,111 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz\n\
 -----END_OPENSSH_PRIVATE_KEY-----\n";
 
     #[test]
-    fn accepts_an_empty_grease_stanza_body() {
-        // The age format permits a GREASE stanza with an empty body. The
-        // Rust age implementation emits these at random, so rejecting one
-        // makes otherwise-valid encryption and rekey operations flaky.
+    fn accepts_unknown_stanza_body_shapes() {
+        // The age format permits an unknown stanza with an empty body. These
+        // stanzas must be ignored, not rejected before the upstream parser
+        // and identity implementation can process the complete header.
         let header = b"age-encryption.org/v1\n\
 -> X25519 recipient\n\
 body\n\
--> test-grease\n\
+-> empty\n\
 \n\
 --- mac\n";
 
         assert!(validate_age_header_structure(header).is_ok());
+
+        let wrapped_header = b"age-encryption.org/v1\n\
+-> X25519 recipient\n\
+body\n\
+-> unknown\n\
+QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB\n\
+\n\
+--- mac\n";
+        assert!(validate_age_header_structure(wrapped_header).is_ok());
+    }
+
+    #[test]
+    fn normal_recipient_paths_reject_ssh_rsa() {
+        assert!(matches!(
+            normalize_recipient(SSH_RSA_RECIPIENT),
+            Err(CryptoError::Recipient)
+        ));
+        assert!(normalize_migration_recipient(SSH_RSA_RECIPIENT).is_ok());
+        assert!(
+            encrypt(
+                b"secret".as_slice(),
+                Vec::new(),
+                &[SSH_RSA_RECIPIENT.to_owned()]
+            )
+            .is_err()
+        );
+        assert!(normalize_recipient(SSH_ED25519_RECIPIENT).is_ok());
+    }
+
+    #[test]
+    fn normal_decrypt_rejects_ciphertext_with_any_ssh_rsa_stanza() -> Result<(), CryptoError> {
+        let (identity, x25519) = generate_x25519();
+        let recipients: Vec<Box<dyn Recipient + Send>> = vec![
+            Box::new(
+                x25519
+                    .parse::<age::x25519::Recipient>()
+                    .map_err(|_| CryptoError::Recipient)?,
+            ),
+            Box::new(
+                SSH_RSA_RECIPIENT
+                    .parse::<age::ssh::Recipient>()
+                    .map_err(|_| CryptoError::Recipient)?,
+            ),
+        ];
+        let encryptor = Encryptor::with_recipients(
+            recipients
+                .iter()
+                .map(|recipient| recipient.as_ref() as &dyn Recipient),
+        )
+        .map_err(|_| CryptoError::Encrypt)?;
+        let mut ciphertext = Vec::new();
+        let mut writer = encryptor
+            .wrap_output(&mut ciphertext)
+            .map_err(|_| CryptoError::Encrypt)?;
+        writer
+            .write_all(b"mixed-recipient-secret")
+            .map_err(|_| CryptoError::Io)?;
+        writer.finish().map_err(|_| CryptoError::Encrypt)?;
+
+        assert!(decrypt(ciphertext.as_slice(), Vec::new(), &identity).is_err());
+        let mut plaintext = Vec::new();
+        decrypt_migration(ciphertext.as_slice(), &mut plaintext, &identity)?;
+        assert_eq!(plaintext, b"mixed-recipient-secret");
+
+        // Worker requests must preserve the explicit migration boundary too.
+        for (operation, accepted) in [
+            (
+                PluginOperation::Decrypt {
+                    identity: Some(&identity),
+                    recipients: &[],
+                },
+                false,
+            ),
+            (
+                PluginOperation::DecryptMigration {
+                    identity: Some(&identity),
+                    recipients: &[],
+                },
+                true,
+            ),
+        ] {
+            let mut request = Vec::new();
+            write_plugin_request(&mut request, &operation, ciphertext.as_slice())?;
+            let mut output = Vec::new();
+            let result = run_plugin_worker_protocol(request.as_slice(), &mut output);
+            assert_eq!(result.is_ok(), accepted);
+            if accepted {
+                assert_eq!(output, b"mixed-recipient-secret");
+            } else {
+                assert!(output.is_empty());
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -1380,7 +1642,9 @@ body\n\
                         &secrecy::SecretString::from(identity.to_owned()),
                     );
                     if metadata.expect == "success" {
-                        result?;
+                        result.map_err(|error| {
+                            std::io::Error::other(format!("{}: {error}", path.display()))
+                        })?;
                         assert_cctv_payload(&metadata, &plaintext)?;
                     } else {
                         assert!(result.is_err());

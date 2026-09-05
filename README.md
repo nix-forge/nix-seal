@@ -559,6 +559,11 @@ that validated public plan. It exposes only each stable ID, role, and public
 recipient, signer, or plugin reference; it never searches for or reads private
 identity files.
 
+Authorization IDs must be unique across identities, groups, and targets. Approval
+thresholds count distinct Ed25519 keys even when the same key is supplied in both
+native and OpenSSH formats. Normal plans and ciphertext operations reject SSH
+RSA; only explicit migration source decryption permits it.
+
 Age-plugin recipients and identities use the standard age plugin protocol
 through an isolated internal worker. The worker resolves only the declared
 `age-plugin-*` binaries, clears the inherited environment, passes an explicit
@@ -623,7 +628,7 @@ secret outputs and declared public outputs. Every output is validated before any
 destination changes; secret outputs are encrypted and round-trip verified,
 public outputs are written with mode `0644`, and replacement failures restore
 the complete prior set. Direct executable generators use an explicit protocol:
-`executable` and every `runtimeInputs` entry must be under `/nix/store`;
+`executable` and every `runtimeInputs` entry must resolve under `/nix/store`;
 `arguments` are literal public values; and the process runs with a cleared
 environment, null standard streams, a private workspace, and a bounded timeout.
 On Unix it also runs in a dedicated process group, so timeout cleanup terminates
@@ -663,11 +668,17 @@ files below `$NIX_SEAL_PROMPT_DIR` in the private workspace. Prompt values never
 enter the plan, command arguments, environment, or logs. A prompt marked
 `persistent = true` may be initialized from an explicit `--prompt-file`; after a
 successful generation its response is atomically retained in the owner-only
-repository state path `.nix-seal/prompt-state/v1/<generator>/<prompt>`, and
-later runs may use that stored response without passing it again. Nonpersistent
-prompts are never retained. Persistent state is plaintext and must be protected
-like any other local credential; it is not part of Git, the Nix store, or the
-public plan. For an explicitly interactive workflow, pass `--interactive`.
+XDG state tree
+`$XDG_STATE_HOME/nix-seal/repositories/<repository-hash>/prompt-state/v1/`
+(falling back to `$HOME/.local/state`), and later runs may use that stored
+response without passing it again. Nonpersistent prompts are never retained.
+Persistent state is plaintext and must be protected like any other local
+credential; it is never placed below the repository, in Git, in the Nix store,
+or in the public plan. Before any Nix evaluation after upgrading, pre-release
+state under `.nix-seal/prompt-state` must be relocated outside the repository or
+securely removed. Generation refuses to run while that legacy path exists; the
+recursive Git ignore is defense in depth and does not replace this one-time
+cleanup. For an explicitly interactive workflow, pass `--interactive`.
 nix-seal then opens the controlling `/dev/tty` rather than stdin/stdout, rejects
 non-terminal sessions, sanitizes public prompt labels before display, bounds
 each response to 1 MiB, masks `hidden` prompts with terminal settings restored
@@ -896,6 +907,10 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 nix flake check
 ```
+
+The checked-in `.envrc` is intentionally inert. Run `nix develop` only after
+reviewing the branch's flake and lock files; an old direnv approval is not a
+safe authorization for code introduced by a later checkout.
 
 Licensed under either Apache-2.0 or MIT, at your option. Contributions require a
 Developer Certificate of Origin sign-off.
