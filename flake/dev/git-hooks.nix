@@ -183,7 +183,9 @@
               enable = true;
               # Use the Nix installation that supplies the daemon and its settings.
               # Injecting nixpkgs' CLI rejects Determinate's schemas/settings.
-              entry = "nix flake check --no-build";
+              # Realize filtered sources as well as checking their outputs. A dry-run
+              # check can reference an unmaterialized cleanSource on a fresh tree.
+              entry = "nix flake check";
               language = "system";
               always_run = true;
               pass_filenames = false;
