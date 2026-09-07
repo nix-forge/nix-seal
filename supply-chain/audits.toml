@@ -91,6 +91,12 @@ criteria = "safe-to-deploy"
 version = "0.6.7"
 notes = "Reviewed the pinned RustCrypto SSHSIG/key crate and the enabled alloc+ed25519 features: it forbids unsafe code, has no build script, and does not enable filesystem, process, network, RSA, ECDSA, encryption, or hardware-key support."
 
+[[audits.toml]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.4+spec-1.1.0 -> 1.1.5+spec-1.1.0"
+notes = "Reviewed the published crate archives against Cargo.lock checksums. The production delta makes integer and float Cow buffers owned in DeValue::make_owned, matching existing string handling, and fixes documentation links. No new unsafe code, build script, runtime dependencies, filesystem, process, or network capabilities. Upstream dev dependency and release metadata changes do not alter this workspace's resolved dependency graph."
+
 [[audits.yaml_serde]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
