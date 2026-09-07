@@ -29,7 +29,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-14]
-    runs-on: ${{ matrix.os }}
+    # Preserve required check names while retiring the macos-14 runner image.
+    runs-on: ${{ matrix.os == 'macos-14' && 'macos-26' || matrix.os }}
     timeout-minutes: 45
     permissions:
       contents: read
@@ -70,7 +71,8 @@ jobs:
             system: aarch64-linux
           - os: macos-14
             system: aarch64-darwin
-    runs-on: ${{ matrix.os }}
+    # Preserve required check names while retiring the macos-14 runner image.
+    runs-on: ${{ matrix.os == 'macos-14' && 'macos-26' || matrix.os }}
     timeout-minutes: 60
     permissions:
       contents: read
