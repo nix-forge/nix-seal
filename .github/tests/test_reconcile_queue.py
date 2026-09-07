@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import unittest
@@ -179,6 +180,24 @@ class ReconcileTests(unittest.TestCase):
         ):
             queue.main()
         self.assertEqual(dispatch.call_count, len(self.refs))
+
+    def test_dispatched_workflows_accept_events_and_inputs(self) -> None:
+        """Verify the real workflow files support the reconciler contract."""
+        workflows = Path(__file__).parents[1] / "workflows"
+        config = (workflows / "reconcile-merge-queue.yml").read_text()
+        declaration = next(
+            line.split(":", 1)[1].strip().strip("'")
+            for line in config.splitlines()
+            if line.strip().startswith("QUEUE_WORKFLOWS:")
+        )
+        for workflow in json.loads(declaration):
+            content = (workflows / workflow).read_text()
+            self.assertIn("\n  workflow_dispatch:", content, workflow)
+            if workflow == "dependency-review.yml":
+                self.assertIn("      base_ref:", content)
+                self.assertIn("      head_ref:", content)
+                self.assertIn("base-ref: ${{ inputs.base_ref }}", content)
+                self.assertIn("head-ref: ${{ inputs.head_ref }}", content)
 
 
 if __name__ == "__main__":

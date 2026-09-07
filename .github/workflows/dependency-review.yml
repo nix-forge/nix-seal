@@ -3,6 +3,16 @@ on:
   pull_request:
   merge_group:
     types: [checks_requested]
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Base commit or ref to compare.
+        required: true
+        type: string
+      head_ref:
+        description: Head commit or ref to compare.
+        required: true
+        type: string
 permissions: {}
 jobs:
   dependency-review:
