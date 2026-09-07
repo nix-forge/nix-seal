@@ -3,16 +3,24 @@
 
   perSystem.treefmt.programs = {
     actionlint.enable = true;
-    yamlfmt.enable = true;
+    yamlfmt = {
+      enable = true;
+      settings.formatter.max_line_length = 100;
+    };
     yamllint = {
       enable = true;
       settings = {
         extends = "default";
         rules = {
+          # Repository YAML uses one document per file.
           document-start = "disable";
+          # yamlfmt emits one space before inline comments.
+          comments.min-spaces-from-content = 1;
+          # GitHub Actions uses the YAML 1.2 key `on`.
+          truthy.check-keys = false;
           line-length = {
             max = 160;
-            level = "warning";
+            level = "error";
           };
         };
       };

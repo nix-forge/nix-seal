@@ -1,0 +1,6 @@
+# Historical PEM serializer contains only header/footer strings and Rust code.
+6b2e943b2e1ff0470be9b5786ff5a1e917fd9e13:crates/nix-seal-cli/src/main.rs:private-key:4007
+# Historical test checks generated PEM delimiters; no key value is embedded.
+6b2e943b2e1ff0470be9b5786ff5a1e917fd9e13:crates/nix-seal-cli/src/main.rs:private-key:5910
+# Historical SSH identity is a public, deterministic parser test fixture inside cfg(test).
+5f01fab270cf5230df9a183155285e15f10252f4:crates/nix-seal-crypto/src/lib.rs:private-key:246

@@ -23,7 +23,7 @@ let
   # paths symlink-free so consumers using O_NOFOLLOW can validate them.
   darwinRuntimeRoot = "/private/var/run/nix-seal/users/${config.home.username}";
   cleanupLegacyDarwinRuntime = lib.optionalString integratedDarwinVolatile ''
-    ${lib.getExe cfg.package} __darwin-runtime cleanup-persistent \
+    run ${lib.getExe cfg.package} __darwin-runtime cleanup-persistent \
       --root ${lib.escapeShellArg "${config.home.homeDirectory}/Library/Caches/nix-seal"}
   '';
   bootPhases = [
@@ -60,7 +60,7 @@ let
           exit 1
         fi
       ''}
-      ${lib.getExe cfg.package} activate \
+      run ${lib.getExe cfg.package} activate \
         --spec ${spec} \
         --identity ${lib.escapeShellArg cfg.identityFile} \
         --runtime-root ${runtimeRoot}

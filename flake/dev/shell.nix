@@ -34,7 +34,7 @@ _: {
             nixd
             nixf-diagnose
             nixfmt
-            nixfmt-rfc-style
+            nixfmt
             osv-scanner
             pinact
             prettier

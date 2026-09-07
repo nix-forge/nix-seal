@@ -8,6 +8,11 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
+    name: build
+    timeout-minutes: 90
+    env:
+      TARGET_SYSTEM: ${{ matrix.system }}
+      ARTIFACT_NAME: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
@@ -30,12 +35,12 @@ jobs:
           persist-credentials: false
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       - name: Build the reproducible Nix package
-        run: nix build --print-build-logs ".#packages.${{ matrix.system }}.nix-seal"
+        run: nix build --print-build-logs ".#packages.${TARGET_SYSTEM}.nix-seal"
       - name: Stage executable
         run: |
           mkdir -p dist
-          cp result/bin/nix-seal "dist/nix-seal-${{ matrix.name }}"
-          chmod 0755 "dist/nix-seal-${{ matrix.name }}"
+          cp result/bin/nix-seal "dist/nix-seal-${ARTIFACT_NAME}"
+          chmod 0755 "dist/nix-seal-${ARTIFACT_NAME}"
       - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           path: result
@@ -43,14 +48,14 @@ jobs:
           output-file: "dist/nix-seal-${{ matrix.name }}.cdx.json"
       - name: Record checksums and build metadata
         run: |
-          sha256sum dist/* > "dist/nix-seal-${{ matrix.name }}.sha256"
+          sha256sum dist/* > "dist/nix-seal-${ARTIFACT_NAME}.sha256"
           {
             echo "commit=${GITHUB_SHA}"
             echo "tag=${GITHUB_REF_NAME}"
-            echo "system=${{ matrix.system }}"
+            echo "system=${TARGET_SYSTEM}"
             echo "runner=${RUNNER_OS}/${RUNNER_ARCH}"
             echo "rust-toolchain=$(test -f rust-toolchain.toml && sed -n 's/^channel = \"\(.*\)\"$/\1/p' rust-toolchain.toml || true)"
-          } > "dist/nix-seal-${{ matrix.name }}.build-info"
+          } > "dist/nix-seal-${ARTIFACT_NAME}.build-info"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nix-seal-release-${{ matrix.name }}
@@ -58,13 +63,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   publish:
+    name: publish
+    timeout-minutes: 15
     needs: build
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: write # Create the tagged release and upload its assets.
+      id-token: write # Authenticate provenance signing with GitHub OIDC.
+      attestations: write # Publish provenance attestations for release assets.
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -83,4 +90,5 @@ jobs:
       - name: Publish signed release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --generate-notes --title "nix-seal ${GITHUB_REF_NAME}"
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --generate-notes --title "nix-seal
+          ${GITHUB_REF_NAME}"

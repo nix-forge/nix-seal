@@ -10,6 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   legacy-symbols:
+    name: legacy-symbols
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -25,6 +26,7 @@ jobs:
             exit 1
           fi
   rust:
+    name: rust
     strategy:
       fail-fast: false
       matrix:
@@ -38,15 +40,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-          components: rustfmt, clippy
+      - name: Select Rust 1.97.0
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --component rustfmt --component clippy
+          rustup override set 1.97.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-targets --all-features --locked
   msrv:
+    name: msrv
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -55,12 +58,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: "1.93.0"
-          components: clippy
+      - name: Select Rust 1.93.0
+        run: |
+          rustup toolchain install 1.93.0 --profile minimal --component clippy
+          rustup override set 1.93.0
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
   nix:
+    name: nix
     strategy:
       fail-fast: false
       matrix:
@@ -83,8 +87,11 @@ jobs:
       - uses: DeterminateSystems/determinate-nix-action@021c8a1bd3570eb21f5c20a054812b0c4d9ca614 # v3.22.3
       - name: Materialize partition source
         run: nix store add-path flake/dev
-      - run: nix flake check --keep-going --show-trace --print-build-logs --system "${{ matrix.system }}"
+      - env:
+          TARGET_SYSTEM: ${{ matrix.system }}
+        run: nix flake check --keep-going --show-trace --print-build-logs --system "$TARGET_SYSTEM"
   tooling:
+    name: tooling
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -101,6 +108,7 @@ jobs:
       - run: nix develop --command prek run --all-files
       - run: nix develop --command gitleaks detect --source . --redact --baseline-path=.gitleaks-baseline.json
   vet:
+    name: vet
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -109,14 +117,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
+      - name: Select Rust 1.97.0
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal
+          rustup override set 1.97.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-vet
         run: cargo install --locked --version 0.10.2 cargo-vet
       - run: cargo vet --locked
   audit:
+    name: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -125,9 +135,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
+      - name: Select Rust 1.97.0
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal
+          rustup override set 1.97.0
       - uses: DeterminateSystems/determinate-nix-action@021c8a1bd3570eb21f5c20a054812b0c4d9ca614 # v3.22.3
       - name: Materialize partition source
         run: nix store add-path flake/dev
@@ -141,6 +152,7 @@ jobs:
       - name: Scan all supported lockfiles
         run: nix develop --command osv-scanner scan source --recursive --config osv-scanner.toml .
   fuzz-smoke:
+    name: fuzz-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -153,9 +165,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: nightly
+      - name: Select Rust nightly
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup override set nightly
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-fuzz
         run: cargo install --locked --version 0.13.2 cargo-fuzz
@@ -178,6 +191,7 @@ jobs:
         working-directory: fuzz
         run: cargo fuzz run cache-state-v1 -- -max_total_time=60
   benchmarks:
+    name: benchmarks
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -186,9 +200,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
+      - name: Select Rust 1.97.0
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal
+          rustup override set 1.97.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Record runner metadata
         run: |
@@ -208,6 +223,7 @@ jobs:
             benchmark.jsonl
             benchmark-environment.txt
   policy:
+    name: policy
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -225,7 +241,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:
-      actions: write
+      actions: write # Dispatch the trusted queue reconciler after validation.
     steps:
       - name: Notify the trusted queue reconciler
         env:

@@ -18,13 +18,15 @@
     in
     {
       pre-commit = {
-        check.enable = pkgs.stdenv.hostPlatform.isDarwin;
+        check.enable = true;
         settings = {
           package = pkgs.prek;
           hooks = {
             treefmt = {
               enable = true;
               name = "treefmt";
+              # treefmt schedules its formatters; avoid many concurrent wrappers.
+              require_serial = true;
               entry = "${lib.getExe config.treefmt.build.wrapper} --no-cache";
               pass_filenames = true;
             };
@@ -111,7 +113,7 @@
               enable = true;
               # NixOS test drivers inject their globals at runtime; the VM test
               # itself validates that dynamic contract.
-              entry = "${lib.getExe pkgs.ty} check --project . --ignore unresolved-reference --python ${lib.getExe pkgs.python3}";
+              entry = "${lib.getExe pkgs.ty} check --project . --python ${lib.getExe pkgs.python3}";
               language = "system";
               always_run = true;
               pass_filenames = false;
@@ -156,22 +158,16 @@
             check-yaml.enable = true;
             editorconfig-checker = {
               enable = true;
-              excludes = [
-                "^LICENSE-.*$"
-                "^docs/runbooks\\.md$"
-                "^crates/nix-seal-cli/tests/authoring\\.rs$"
-              ];
+              excludes = [ "^LICENSE-.*$" ];
             };
             typos = {
               enable = true;
-              settings.configPath = ".typos.toml";
+              # The upstream hook's generated empty [default] table overrides configPath.
+              entry = "${lib.getExe pkgs.typos} --config .typos.toml --force-exclude";
             };
             zizmor = {
               enable = true;
-              args = [
-                "--persona=pedantic"
-                "--min-severity=medium"
-              ];
+              args = [ "--persona=pedantic" ];
             };
             gitleaks = {
               enable = true;
@@ -185,7 +181,11 @@
 
             nix-flake-check = {
               enable = true;
-              entry = "${lib.getExe pkgs.nix} flake check --no-build";
+              # Use the Nix installation that supplies the daemon and its settings.
+              # Injecting nixpkgs' CLI rejects Determinate's schemas/settings.
+              # Realize filtered sources as well as checking their outputs. A dry-run
+              # check can reference an unmaterialized cleanSource on a fresh tree.
+              entry = "nix flake check";
               language = "system";
               always_run = true;
               pass_filenames = false;
