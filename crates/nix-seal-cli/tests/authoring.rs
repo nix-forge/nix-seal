@@ -388,11 +388,11 @@ fn logical_collection_batch_authors_independent_ciphertexts()
     std::fs::write(
         &mapping,
         br#"{
-          "schema": "nix-seal.collection.v1",
-          "entries": [
-            {"secret": "db/password", "path": "database.password"},
-            {"secret": "db/token", "path": "database.token"}
-          ]
+            "schema": "nix-seal.collection.v1",
+            "entries": [
+                {"secret": "db/password", "path": "database.password"},
+                {"secret": "db/token", "path": "database.token"}
+            ]
         }"#,
     )?;
     let authored = run_with_stdin(
@@ -463,6 +463,100 @@ fn logical_collection_batch_authors_independent_ciphertexts()
         ],
     )?;
     assert_eq!(token.stdout, b"batch-token");
+    Ok(())
+}
+
+#[test]
+fn private_yaml_parse_errors_do_not_reach_cli_diagnostics() -> Result<(), Box<dyn std::error::Error>>
+{
+    let fixture = fixture()?;
+    let canary = "NIX_SEAL_PRIVATE_YAML_CANARY";
+    let mapping = fixture.root.join("mapping.json");
+    std::fs::write(
+        &mapping,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "nix-seal.collection.v1",
+            "entries": [{"secret": "db/password", "path": "token"}]
+        }))?,
+    )?;
+    let cases = [
+        (
+            format!("{canary}: one\n{canary}: two\n"),
+            "structured YAML secret input is malformed",
+        ),
+        (
+            format!("token: !!int {canary}\n"),
+            "structured YAML secret input is malformed",
+        ),
+        (
+            format!("{canary}:\n  ? [nested]\n  : value\n"),
+            "logical YAML is malformed",
+        ),
+        (
+            format!("{canary}: !private value\n"),
+            "logical YAML is malformed",
+        ),
+    ];
+    for json in [false, true] {
+        for (input, message) in &cases {
+            let mut arguments = vec![
+                "secret",
+                "batch",
+                "--mapping",
+                path_text(&mapping)?,
+                "--format",
+                "yaml",
+                "--plan",
+                path_text(&fixture.plan_path)?,
+                "--identity",
+                path_text(&fixture.identity_path)?,
+            ];
+            if json {
+                arguments.push("--json");
+            }
+            let output = run_with_stdin(&fixture.root, &arguments, input.as_bytes())?;
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            assert_eq!(
+                String::from_utf8(output.stderr)?,
+                format!("nix-seal: {message}\n")
+            );
+            assert!(!fixture.root.join("secrets/db.age").exists());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn valid_private_yaml_is_preserved_without_logging_it() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = fixture()?;
+    let plaintext = b"token: NIX_SEAL_PRIVATE_YAML_CANARY\n";
+    let created = run_with_stdin(
+        &fixture.root,
+        &[
+            "secret",
+            "create",
+            "--plan",
+            path_text(&fixture.plan_path)?,
+            "--secret",
+            "db/password",
+            "--identity",
+            path_text(&fixture.identity_path)?,
+            "--format",
+            "yaml",
+        ],
+        plaintext,
+    )?;
+    assert!(created.status.success());
+    for output in [&created.stdout, &created.stderr] {
+        assert!(!String::from_utf8_lossy(output).contains("NIX_SEAL_PRIVATE_YAML_CANARY"));
+    }
+    let revealed = run(
+        &fixture.root,
+        &reveal_args(&fixture.plan_path, &fixture.root, &fixture.identity_path)?,
+    )?;
+    assert!(revealed.status.success());
+    assert_eq!(revealed.stdout, plaintext);
     Ok(())
 }
 

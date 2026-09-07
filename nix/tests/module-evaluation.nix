@@ -313,6 +313,18 @@ in
       builtins.elem "setupLaunchAgents" standaloneHomeConfiguration.config.home.activation.nixSealServices.after
       == pkgs.stdenv.hostPlatform.isDarwin;
     pkgs.runCommand "nix-seal-home-service-activation-order" { } "touch $out";
+  home-dry-activation = pkgs.runCommand "nix-seal-home-dry-activation" { } ''
+    export DRY_RUN=1
+    export XDG_RUNTIME_DIR="$TMPDIR/runtime"
+    run() {
+      printf 'skipped\n' >> "$TMPDIR/skipped"
+    }
+    ${standaloneHomeConfiguration.config.home.activation.nixSeal.data}
+    ${standaloneHomeConfiguration.config.home.activation.nixSealServices.data}
+    test "$(wc -l < "$TMPDIR/skipped")" -eq 2
+    test ! -e "$XDG_RUNTIME_DIR"
+    touch "$out"
+  '';
   service-credential-policy-projection =
     pkgs.runCommand "nix-seal-service-credential-policy-projection" { nativeBuildInputs = [ pkgs.jq ]; }
       ''

@@ -5,6 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     systems.url = "github:nix-systems/default";
     flake-parts.url = "github:hercules-ci/flake-parts";
+    flake-schemas.url = "https://flakehub.com/f/DeterminateSystems/flake-schemas/0";
     cctv = {
       url = "github:C2SP/CCTV";
       flake = false;

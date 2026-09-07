@@ -56,18 +56,9 @@ version = "1.9.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.argon2]]
-version = "0.5.3"
-criteria = "safe-to-deploy"
-notes = "Dependency-audit backlog; constrain use to Argon2id PHC generation and replace with a trusted or local audit before 1.0."
-
-[[exemptions.argon2]]
 version = "0.6.0"
 criteria = "safe-to-deploy"
 notes = "Dependency-audit backlog; this breaking update is constrained to Argon2id PHC generation and must be replaced with a trusted or local audit before 1.0."
-
-[[exemptions.arrayref]]
-version = "0.3.9"
-criteria = "safe-to-deploy"
 
 [[exemptions.arrayvec]]
 version = "0.7.8"
@@ -92,6 +83,7 @@ criteria = "safe-to-deploy"
 [[exemptions.base64]]
 version = "0.23.0"
 criteria = "safe-to-deploy"
+notes = "Baseline exemption retained for recorded audit deltas to the locked version. Removing it breaks the audit chain; this does not claim a full independent audit."
 
 [[exemptions.base64ct]]
 version = "1.8.3"
@@ -111,7 +103,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.bech32]]
 version = "0.12.0"
-criteria = "safe-to-deploy"
+criteria = "safe-to-run"
 
 [[exemptions.bitflags]]
 version = "1.3.2"
@@ -120,11 +112,6 @@ criteria = "safe-to-deploy"
 [[exemptions.bitflags]]
 version = "2.13.1"
 criteria = "safe-to-deploy"
-
-[[exemptions.blake2]]
-version = "0.10.6"
-criteria = "safe-to-deploy"
-notes = "Transitive Argon2 dependency-audit backlog; replace with a trusted or local audit before 1.0."
 
 [[exemptions.blake2]]
 version = "0.11.0"
@@ -182,18 +169,17 @@ criteria = "safe-to-deploy"
 [[exemptions.clap]]
 version = "4.6.5"
 criteria = "safe-to-deploy"
+notes = "Baseline exemption retained for recorded audit deltas to the locked version. Removing it breaks the audit chain; this does not claim a full independent audit."
 
 [[exemptions.clap_builder]]
 version = "4.6.5"
 criteria = "safe-to-deploy"
+notes = "Baseline exemption retained for recorded audit deltas to the locked version. Removing it breaks the audit chain; this does not claim a full independent audit."
 
 [[exemptions.clap_complete]]
 version = "4.6.8"
 criteria = "safe-to-deploy"
-
-[[exemptions.clap_complete_nushell]]
-version = "4.6.1"
-criteria = "safe-to-deploy"
+notes = "Baseline exemption retained for recorded audit deltas to the locked version. Removing it breaks the audit chain; this does not claim a full independent audit."
 
 [[exemptions.clap_complete_nushell]]
 version = "4.6.2"
@@ -591,11 +577,6 @@ version = "0.9.12"
 criteria = "safe-to-deploy"
 
 [[exemptions.password-hash]]
-version = "0.5.0"
-criteria = "safe-to-deploy"
-notes = "Transitive Argon2 dependency-audit backlog; replace with a trusted or local audit before 1.0."
-
-[[exemptions.password-hash]]
 version = "0.6.1"
 criteria = "safe-to-deploy"
 notes = "Transitive Argon2 dependency-audit backlog; replace with a trusted or local audit before 1.0."
@@ -651,14 +632,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.primeorder]]
 version = "0.13.6"
-criteria = "safe-to-deploy"
-
-[[exemptions.proc-macro-error-attr3]]
-version = "3.0.3"
-criteria = "safe-to-deploy"
-
-[[exemptions.proc-macro-error3]]
-version = "3.0.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.proc-macro2]]
@@ -798,10 +771,6 @@ version = "0.30.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.serde_jcs]]
-version = "0.1.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.serde_jcs]]
 version = "0.2.0"
 criteria = "safe-to-deploy"
 
@@ -848,6 +817,7 @@ criteria = "safe-to-deploy"
 [[exemptions.spin]]
 version = "0.9.8"
 criteria = "safe-to-deploy"
+notes = "Baseline exemption retained for recorded audit deltas to the locked version. Removing it breaks the audit chain; this does not claim a full independent audit."
 
 [[exemptions.spki]]
 version = "0.7.3"
@@ -878,19 +848,11 @@ version = "1.0.69"
 criteria = "safe-to-deploy"
 
 [[exemptions.thiserror]]
-version = "2.0.19"
-criteria = "safe-to-deploy"
-
-[[exemptions.thiserror]]
 version = "2.0.20"
 criteria = "safe-to-deploy"
 
 [[exemptions.thiserror-impl]]
 version = "1.0.69"
-criteria = "safe-to-deploy"
-
-[[exemptions.thiserror-impl]]
-version = "2.0.19"
 criteria = "safe-to-deploy"
 
 [[exemptions.thiserror-impl]]
@@ -903,10 +865,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.toml]]
 version = "0.5.11"
-criteria = "safe-to-deploy"
-
-[[exemptions.toml]]
-version = "0.9.12+spec-1.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.toml]]
@@ -995,10 +953,6 @@ version = "0.61.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.winnow]]
-version = "0.7.15"
-criteria = "safe-to-deploy"
-
-[[exemptions.winnow]]
 version = "1.0.4"
 criteria = "safe-to-deploy"
 
@@ -1021,12 +975,9 @@ version = "3.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.yaml_serde]]
-version = "0.10.4"
-criteria = "safe-to-deploy"
-
-[[exemptions.yaml_serde]]
 version = "0.10.6"
 criteria = "safe-to-deploy"
+notes = "Baseline exemption retained for recorded audit deltas to the locked version. Removing it breaks the audit chain; this does not claim a full independent audit."
 
 [[exemptions.zerocopy]]
 version = "0.8.55"

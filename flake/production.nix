@@ -2,6 +2,21 @@
 let
   inherit (inputs.nixpkgs) lib;
 
+  exportSchema = what: valid: {
+    version = 1;
+    doc = "Validate the shape of exported ${what}; behavioral checks are in checks.";
+    inventory = output: {
+      evalChecks.isAttributeSet = builtins.isAttrs output;
+      children = builtins.mapAttrs (_: value: {
+        inherit what;
+        evalChecks.isValidExport = valid value;
+      }) output;
+    };
+  };
+  moduleSchema = exportSchema "Nix module" (
+    value: builtins.isFunction value || builtins.isAttrs value
+  );
+
   packageFor =
     system:
     let
@@ -89,10 +104,12 @@ in
         default = {
           type = "app";
           program = "${nixSeal}/bin/nix-seal";
+          meta.description = nixSeal.meta.description;
         };
         nix-seal = {
           type = "app";
           program = "${nixSeal}/bin/nix-seal";
+          meta.description = nixSeal.meta.description;
         };
       };
 
@@ -105,6 +122,10 @@ in
         inherit (inputs) self;
       }
       // lib.optionalAttrs (pkgs.stdenv.hostPlatform.isLinux && system == "x86_64-linux") {
+        runtime-mount-vm = import ../nix/tests/runtime-mount-vm.nix {
+          inherit inputs system pkgs;
+          inherit (inputs) self;
+        };
         runtime-vm = import ../nix/tests/runtime-vm.nix {
           inherit system pkgs;
           inherit (inputs) self;
@@ -113,6 +134,13 @@ in
     };
 
   flake = {
+    schemas = inputs.flake-schemas.exportedSchemas // {
+      flakeModules = moduleSchema;
+      homeManagerModules = moduleSchema;
+      lib = exportSchema "library function or schema constant" (
+        value: builtins.isFunction value || builtins.isString value || builtins.isPath value
+      );
+    };
     nixosModules.default = import ../nix/modules/nixos.nix inputs.self;
     darwinModules.default = import ../nix/modules/darwin.nix inputs.self;
     homeManagerModules.default = import ../nix/modules/home-manager.nix inputs.self;

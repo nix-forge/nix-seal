@@ -4867,6 +4867,8 @@ fn run_generator_worker_main(arguments: &GeneratorWorkerArgs) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         let isolated = {
+            // The replacement requires unsafe code, forbidden in this workspace.
+            // Only NEWNET is used; FILES is the unsound case in the old API.
             #[allow(deprecated)]
             {
                 rustix::thread::unshare(rustix::thread::UnshareFlags::NEWNET).is_ok()
@@ -5864,7 +5866,10 @@ fn extract_collection_values(
         SecretFormat::Toml => {
             toml::from_str(text).map_err(|_| anyhow::anyhow!("logical TOML is malformed"))?
         }
-        SecretFormat::Yaml => yaml_serde::from_str(text).context("logical YAML is malformed")?,
+        // YAML diagnostics may include private mapping keys, values, or tags.
+        SecretFormat::Yaml => {
+            yaml_serde::from_str(text).map_err(|_| anyhow::anyhow!("logical YAML is malformed"))?
+        }
         SecretFormat::Dotenv => unreachable!(),
     };
     entries
@@ -6051,8 +6056,9 @@ fn validate_structured_secret_bytes(input: &[u8], format: Option<SecretFormat>) 
                 .map_err(|_| anyhow::anyhow!("structured TOML secret input is malformed"))?;
         }
         SecretFormat::Yaml => {
-            let _: yaml_serde::Value =
-                yaml_serde::from_str(text).context("structured YAML secret input is malformed")?;
+            // Discard the parser error itself: its cause can contain private input.
+            let _: yaml_serde::Value = yaml_serde::from_str(text)
+                .map_err(|_| anyhow::anyhow!("structured YAML secret input is malformed"))?;
         }
         SecretFormat::Dotenv => validate_dotenv(text)?,
     }

@@ -13,7 +13,7 @@ let
     else
       [ ];
   runtimeArguments =
-    command:
+    command: users:
     [
       (lib.getExe cfg.package)
       "__linux-runtime"
@@ -24,10 +24,12 @@ let
     ++ lib.concatMap (user: [
       "--user"
       user
-    ]) embeddedHomeManagerUsers;
-  prepare = lib.escapeShellArgs (runtimeArguments "prepare");
+    ]) users;
+  prepare = lib.escapeShellArgs (runtimeArguments "prepare" embeddedHomeManagerUsers);
   mountRuntime = ''
-    if [ "''${DRY_ACTIVATE:-0}" != 1 ]; then
+    # Mounting an already mounted tmpfs hides every existing secret generation.
+    # The runtime validator below still rejects an unsafe existing mount.
+    if ! ${pkgs.util-linux}/bin/mountpoint --quiet -- ${lib.escapeShellArg cfg.linux.volatileRuntime.root}; then
       ${pkgs.util-linux}/bin/mount -- ${lib.escapeShellArg cfg.linux.volatileRuntime.root}
     fi
   '';
@@ -37,7 +39,9 @@ let
     isExecutable = true;
     replacements = {
       bash = lib.getExe pkgs.bash;
-      inherit mountRuntime prepare;
+      inherit mountRuntime;
+      # This snippet can run before NixOS creates the target user accounts.
+      prepare = lib.escapeShellArgs (runtimeArguments "prepare" [ ]);
     };
   };
   runtimeDeps = lib.optional cfg.linux.volatileRuntime.enable "nixSealRuntime";
@@ -188,6 +192,13 @@ in
           ];
           text = "${runtimeActivation}";
         };
+        nixSealRuntimeUsers = {
+          deps = [
+            "users"
+            "nixSealRuntime"
+          ];
+          text = prepare;
+        };
       })
       (lib.mkIf (cfg.activationSpecs ? users) {
         users.deps = lib.mkAfter [ "nixSealUsers" ];
@@ -209,33 +220,52 @@ in
         };
       })
     ];
-    systemd.services.nix-seal-runtime = lib.mkIf cfg.linux.volatileRuntime.enable {
-      description = "Prepare nix-seal Linux volatile runtime";
-      wantedBy = [ "multi-user.target" ];
-      before = [ "nix-seal-activate.service" ];
-      after = [ "local-fs.target" ];
-      unitConfig.RequiresMountsFor = cfg.linux.volatileRuntime.root;
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        UMask = "0077";
-        ExecStart = prepare;
-      };
-    };
-    systemd.services.nix-seal-activate = {
-      description = "Materialize nix-seal runtime generation";
-      wantedBy = [ "multi-user.target" ];
-      before = [ "multi-user.target" ];
-      after = [ "local-fs.target" ];
-      requires = lib.optional cfg.linux.volatileRuntime.enable "nix-seal-runtime.service";
-      wants = lib.optional cfg.linux.volatileRuntime.enable "nix-seal-runtime.service";
-      unitConfig.RequiresMountsFor = lib.optional cfg.linux.volatileRuntime.enable cfg.linux.volatileRuntime.root;
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        UMask = "0077";
-        ExecStart = bootActivationCommands;
-      };
-    };
+    # User managers can start for lingering users before normal login sessions.
+    # Both they and embedded Home Manager need the private runtime roots first.
+    systemd.services = lib.mkMerge [
+      (lib.mkIf cfg.linux.volatileRuntime.enable (
+        {
+          "user@" = lib.mkIf (embeddedHomeManagerUsers != [ ]) {
+            after = [ "nix-seal-runtime.service" ];
+            # Do not stop login sessions when runtime preparation restarts.
+            wants = [ "nix-seal-runtime.service" ];
+          };
+        }
+        // lib.genAttrs (map (user: "home-manager-${user}") embeddedHomeManagerUsers) (_: {
+          after = [ "nix-seal-runtime.service" ];
+          requires = [ "nix-seal-runtime.service" ];
+        })
+      ))
+      {
+        nix-seal-runtime = lib.mkIf cfg.linux.volatileRuntime.enable {
+          description = "Prepare nix-seal Linux volatile runtime";
+          wantedBy = [ "multi-user.target" ];
+          before = [ "nix-seal-activate.service" ];
+          after = [ "local-fs.target" ];
+          unitConfig.RequiresMountsFor = cfg.linux.volatileRuntime.root;
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            UMask = "0077";
+            ExecStart = prepare;
+          };
+        };
+        nix-seal-activate = {
+          description = "Materialize nix-seal runtime generation";
+          wantedBy = [ "multi-user.target" ];
+          before = [ "multi-user.target" ];
+          after = [ "local-fs.target" ];
+          requires = lib.optional cfg.linux.volatileRuntime.enable "nix-seal-runtime.service";
+          wants = lib.optional cfg.linux.volatileRuntime.enable "nix-seal-runtime.service";
+          unitConfig.RequiresMountsFor = lib.optional cfg.linux.volatileRuntime.enable cfg.linux.volatileRuntime.root;
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            UMask = "0077";
+            ExecStart = bootActivationCommands;
+          };
+        };
+      }
+    ];
   };
 }

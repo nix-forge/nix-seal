@@ -177,6 +177,29 @@ does not change the credential used by the service.
    reboots. If the failed deployment involved a suspected credential exposure,
    rotate the application value before making the rollback durable.
 
+## Runtime preparation during deployment
+
+On NixOS, repeated activation reuses `/run/nix-seal` when it is already mounted
+and validates that mount before preparing runtime directories. An unsafe
+existing mount causes preparation to fail. Do not mount another tmpfs over it
+to clear the error, because that hides the active generation and identities.
+Inspect the mount type, options, ownership, and reported validation failure
+without reading secret files. Correct the declarative configuration, then use
+the normal deployment or controlled reboot procedure.
+
+The early system runtime preparation runs before account creation. Private
+runtime roots for embedded Home Manager users are prepared after the users
+exist, and their Home Manager services wait for the runtime preparation service.
+Lingering user managers also wait for preparation at boot. If a first deployment
+fails for a new account, inspect `nix-seal-runtime.service` and that account's
+Home Manager unit before retrying activation. Keep plaintext out of logs.
+
+Use NixOS `dry-activate` or Home Manager's dry-run mode when inspecting a
+candidate deployment. NixOS dry activation skips runtime preparation, and Home
+Manager dry runs do not execute secret activation or legacy Darwin runtime
+cleanup. A dry run does not prove that the mounted runtime or identity will pass
+validation during the real deployment.
+
 ## Recovery from Git and offline backups
 
 1. Restore the exact reviewed plan and canonical age sources from a trusted Git
