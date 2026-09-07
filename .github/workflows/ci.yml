@@ -1,8 +1,6 @@
 name: CI
 on:
   pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
   merge_group:
     types: [checks_requested]
@@ -31,7 +29,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-14]
-    runs-on: ${{ matrix.os }}
+    # Preserve required check names while retiring the macos-14 runner image.
+    runs-on: ${{ matrix.os == 'macos-14' && 'macos-26' || matrix.os }}
     timeout-minutes: 45
     permissions:
       contents: read
@@ -72,7 +71,8 @@ jobs:
             system: aarch64-linux
           - os: macos-14
             system: aarch64-darwin
-    runs-on: ${{ matrix.os }}
+    # Preserve required check names while retiring the macos-14 runner image.
+    runs-on: ${{ matrix.os == 'macos-14' && 'macos-26' || matrix.os }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -94,6 +94,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: DeterminateSystems/determinate-nix-action@021c8a1bd3570eb21f5c20a054812b0c4d9ca614 # v3.22.3
+      - name: Test merge queue reconciliation
+        run: python3 -m unittest discover -s .github/tests
       - name: Materialize partition source
         run: nix store add-path flake/dev
       - run: nix develop --command prek run --all-files
@@ -110,6 +112,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: 1.97.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-vet
         run: cargo install --locked --version 0.10.2 cargo-vet
       - run: cargo vet --locked
@@ -128,6 +131,7 @@ jobs:
       - uses: DeterminateSystems/determinate-nix-action@021c8a1bd3570eb21f5c20a054812b0c4d9ca614 # v3.22.3
       - name: Materialize partition source
         run: nix store add-path flake/dev
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-audit
         run: cargo install --locked --version 0.22.2 cargo-audit
       # RustCrypto RSA is retained only for the documented OpenSSH migration
@@ -152,6 +156,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: nightly
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-fuzz
         run: cargo install --locked --version 0.13.2 cargo-fuzz
       - name: Fuzz strict public plan parsing
@@ -184,6 +189,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: 1.97.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Record runner metadata
         run: |
           {
