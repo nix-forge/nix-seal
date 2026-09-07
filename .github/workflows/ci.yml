@@ -218,6 +218,7 @@ jobs:
           persist-credentials: false
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
   queue-completion:
+    continue-on-error: true
     name: Queue completion callback
     if: always() && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/gh-readonly-queue/main/')
     needs: [legacy-symbols, rust, msrv, nix, tooling, vet, audit, fuzz-smoke, benchmarks, policy]
@@ -230,4 +231,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh workflow run reconcile-merge-queue.yml --ref main -f source_run_id="$GITHUB_RUN_ID"
+        run: |
+          for attempt in 1 2 3; do
+            if gh workflow run reconcile-merge-queue.yml --ref main -f source_run_id="$GITHUB_RUN_ID"; then
+              exit 0
+            fi
+            echo "::warning::Queue completion notification attempt $attempt failed"
+            sleep 5
+          done
+          exit 1
