@@ -693,6 +693,18 @@ fn run(root: &Path, arguments: &[&str]) -> Result<std::process::Output, std::io:
         .output()
 }
 
+#[test]
+fn rejected_command_can_close_stdin_before_the_test_finishes_writing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = std::env::current_dir()?;
+    // Exceed pipe capacity so rejection necessarily interrupts the writer.
+    let input = vec![b'x'; 2 * 1024 * 1024];
+    let output = run_with_stdin(&root, &["--invalid-authoring-test-option"], &input)?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument"));
+    Ok(())
+}
+
 fn run_with_stdin(
     root: &Path,
     arguments: &[&str],
@@ -705,12 +717,20 @@ fn run_with_stdin(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    child
+    let write_result = child
         .stdin
         .take()
         .ok_or("child stdin is unavailable")?
-        .write_all(value)?;
-    Ok(child.wait_with_output()?)
+        .write_all(value);
+    let output = child.wait_with_output()?;
+    // Rejected commands may exit without reading stdin. Keep their output so
+    // callers can assert the rejection, and always reap the child first.
+    if let Err(error) = write_result
+        && error.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(error.into());
+    }
+    Ok(output)
 }
 
 fn write_private(path: &Path, value: &[u8]) -> Result<(), std::io::Error> {
