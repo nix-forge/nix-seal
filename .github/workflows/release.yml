@@ -33,7 +33,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Set up Nix
+        uses: nix-forge/ci/actions/setup-nix@a75d21dababfd55145e2df1db81f3d2d865bec59 # v1.0.0
+        with:
+          cache: 'false'
+          cache-scope: release-build
       - name: Build the reproducible Nix package
         run: nix build --print-build-logs ".#packages.${TARGET_SYSTEM}.nix-seal"
       - name: Stage executable
@@ -69,9 +73,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      contents: write # Create the tagged release and upload its assets.
-      id-token: write # Authenticate provenance signing with GitHub OIDC.
-      attestations: write # Publish provenance attestations for release assets.
+      contents: write # Update trusted repository automation.
+      id-token: write # Authenticate the configured publication service.
+      attestations: write # Publish release provenance.
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

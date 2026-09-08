@@ -32,6 +32,9 @@ updates:
     groups:
       github-actions-minor-patch:
         patterns: ["*"]
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: nix
     directory: "/"
     schedule:

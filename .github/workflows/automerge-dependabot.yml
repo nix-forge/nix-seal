@@ -9,20 +9,7 @@ concurrency:
 jobs:
   enable:
     name: enable
-    if: >-
-      github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.base.repo.full_name
-      == 'nix-forge/nix-seal' && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
-      && github.event.pull_request.draft == false
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
     permissions:
-      contents: write # Enable auto-merge for the pull request.
-      pull-requests: write # Create or update pull requests and enable auto-merge.
-    steps:
-      - name: Enable squash auto-merge after required checks
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --auto --squash
+      contents: write # Update trusted repository automation.
+      pull-requests: write # Update pull request metadata.
+    uses: nix-forge/ci/.github/workflows/automerge.yml@a75d21dababfd55145e2df1db81f3d2d865bec59 # v1.0.0
