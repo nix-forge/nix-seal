@@ -40,10 +40,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Select Rust 1.97.0
-        run: |
-          rustup toolchain install 1.97.0 --profile minimal --component rustfmt --component clippy
-          rustup override set 1.97.0
+      - name: Select repository Rust toolchain
+        run: python3 .github/scripts/ci-rust.py toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -58,10 +56,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Select Rust 1.93.0
-        run: |
-          rustup toolchain install 1.93.0 --profile minimal --component clippy
-          rustup override set 1.93.0
+      - name: Select manifest MSRV
+        run: python3 .github/scripts/ci-rust.py msrv
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
   nix:
     name: nix
@@ -85,12 +81,12 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@7903659c4b16378411a3ea79dd73cec5c82708cc # v2.0.0
+        uses: nix-forge/ci/actions/setup-nix@d84cb92725a2ab7eafcdc9d1f1fb7a06048dfa1a # v2.2.0
         with:
           cache: 'false'
           cache-scope: ci-nix
-      - name: Materialize partition source
-        run: nix store add-path flake/dev
+      - name: Materialize discovered partitions
+        uses: nix-forge/ci/actions/materialize-partitions@d84cb92725a2ab7eafcdc9d1f1fb7a06048dfa1a # v2.2.0
       - env:
           TARGET_SYSTEM: ${{ matrix.system }}
         run: nix flake check --keep-going --show-trace --print-build-logs --system "$TARGET_SYSTEM"
@@ -106,16 +102,16 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@7903659c4b16378411a3ea79dd73cec5c82708cc # v2.0.0
+        uses: nix-forge/ci/actions/setup-nix@d84cb92725a2ab7eafcdc9d1f1fb7a06048dfa1a # v2.2.0
         with:
           cache: 'false'
           cache-scope: ci-tooling
       - name: Check shared workflow contracts
-        uses: nix-forge/ci/actions/validate-workflows@7903659c4b16378411a3ea79dd73cec5c82708cc # v2.0.0
+        uses: nix-forge/ci/actions/validate-workflows@d84cb92725a2ab7eafcdc9d1f1fb7a06048dfa1a # v2.2.0
       - name: Test Rust build source boundaries
         run: python3 -m unittest discover -s .github/tests
       - name: Run repository hooks and publication checks
-        uses: nix-forge/ci/actions/repository-checks@7903659c4b16378411a3ea79dd73cec5c82708cc # v2.0.0
+        uses: nix-forge/ci/actions/repository-checks@d84cb92725a2ab7eafcdc9d1f1fb7a06048dfa1a # v2.2.0
         with:
           history-baseline: .gitleaks-baseline.json
   vet:
@@ -128,10 +124,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Select Rust 1.97.0
-        run: |
-          rustup toolchain install 1.97.0 --profile minimal
-          rustup override set 1.97.0
+      - name: Select repository Rust toolchain
+        run: python3 .github/scripts/ci-rust.py toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-vet
         run: cargo install --locked --version 0.10.2 cargo-vet
@@ -146,17 +140,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Select Rust 1.97.0
-        run: |
-          rustup toolchain install 1.97.0 --profile minimal
-          rustup override set 1.97.0
+      - name: Select repository Rust toolchain
+        run: python3 .github/scripts/ci-rust.py toolchain
       - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@7903659c4b16378411a3ea79dd73cec5c82708cc # v2.0.0
+        uses: nix-forge/ci/actions/setup-nix@d84cb92725a2ab7eafcdc9d1f1fb7a06048dfa1a # v2.2.0
         with:
           cache: 'false'
           cache-scope: ci-audit
-      - name: Materialize partition source
-        run: nix store add-path flake/dev
+      - name: Materialize discovered partitions
+        uses: nix-forge/ci/actions/materialize-partitions@d84cb92725a2ab7eafcdc9d1f1fb7a06048dfa1a # v2.2.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-audit
         run: cargo install --locked --version 0.22.2 cargo-audit
@@ -187,24 +179,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-fuzz
         run: cargo install --locked --version 0.13.2 cargo-fuzz
-      - name: Fuzz strict public plan parsing
-        working-directory: fuzz
-        run: cargo fuzz run plan-v2 -- -max_total_time=60
-      - name: Fuzz strict public activation parsing
-        working-directory: fuzz
-        run: cargo fuzz run activation-v2 -- -max_total_time=60
-      - name: Fuzz strict public template parsing
-        working-directory: fuzz
-        run: cargo fuzz run template-v1 -- -max_total_time=60
-      - name: Fuzz strict public artifact-envelope parsing
-        working-directory: fuzz
-        run: cargo fuzz run artifact-envelope-v1 -- -max_total_time=60
-      - name: Fuzz recipient and identity parsing
-        working-directory: fuzz
-        run: cargo fuzz run identity-v1 -- -max_total_time=60
-      - name: Fuzz transactional cache state
-        working-directory: fuzz
-        run: cargo fuzz run cache-state-v1 -- -max_total_time=60
+      - name: Fuzz every registered target
+        run: python3 .github/scripts/ci-rust.py fuzz
   benchmarks:
     name: benchmarks
     runs-on: ubuntu-latest
@@ -215,10 +191,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Select Rust 1.97.0
-        run: |
-          rustup toolchain install 1.97.0 --profile minimal
-          rustup override set 1.97.0
+      - name: Select repository Rust toolchain
+        run: python3 .github/scripts/ci-rust.py toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Record runner metadata
         run: |
@@ -259,4 +233,4 @@ jobs:
       actions: write # Dispatch trusted queue validation.
     steps:
       - name: Notify trusted queue reconciler
-        uses: nix-forge/ci/actions/queue-completion@7903659c4b16378411a3ea79dd73cec5c82708cc # v2.0.0
+        uses: nix-forge/ci/actions/queue-completion@d84cb92725a2ab7eafcdc9d1f1fb7a06048dfa1a # v2.2.0

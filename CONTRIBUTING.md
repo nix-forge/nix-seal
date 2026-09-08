@@ -37,3 +37,16 @@ Run `python3 -m unittest discover -s .github/tests` in the development shell to
 check that metadata edits preserve the source hash while code, schemas, Cargo
 inputs and new fixtures change it. A native package build verifies that the
 filtered source still supplies everything needed by the workspace and its tests.
+
+## CI inventories
+
+The stable compiler and components come from `rust-toolchain.toml`; the MSRV
+comes from `workspace.package.rust-version` in `Cargo.toml`. The Nix package and
+documentation versions also use the workspace version. Update those manifests
+instead of repeating version edits in workflows.
+
+Fuzz smoke tests run every binary registered in `fuzz/Cargo.toml`, each with the
+same bounded time budget. Adding or removing a target changes CI automatically.
+Python syntax checks cover tracked Python files, and Ruff discovers files from
+the repository root. The type checker retains explicit scope for the runtime
+test DSL and CI scripts.

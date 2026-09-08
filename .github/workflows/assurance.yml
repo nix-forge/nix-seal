@@ -57,10 +57,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Select Rust 1.97.0
-        run: |
-          rustup toolchain install 1.97.0 --profile minimal
-          rustup override set 1.97.0
+      - name: Select repository Rust toolchain
+        run: python3 .github/scripts/ci-rust.py toolchain
       - name: Install cargo-mutants
         run: cargo install --locked --version 27.1.0 cargo-mutants
       - name: Mutate policy and core crates
