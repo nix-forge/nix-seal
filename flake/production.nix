@@ -1,6 +1,8 @@
 { inputs, ... }:
 let
   inherit (inputs.nixpkgs) lib;
+  manifest = fromTOML (builtins.readFile ../Cargo.toml);
+  inherit (manifest.workspace.package) version;
 
   exportSchema = what: valid: {
     version = 1;
@@ -30,7 +32,7 @@ let
     in
     pkgs.rustPlatform.buildRustPackage {
       pname = "nix-seal";
-      version = "0.1.0-alpha.1";
+      inherit version;
       inherit src;
       cargoLock.lockFile = "${src}/Cargo.lock";
       buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libiconv ];
@@ -68,7 +70,7 @@ let
       pkgs = inputs.nixpkgs.legacyPackages.${system};
       nixSeal = packageFor system;
     in
-    pkgs.runCommand "nix-seal-documentation-0.1.0-alpha.1"
+    pkgs.runCommand "nix-seal-documentation-${version}"
       {
         nativeBuildInputs = [
           nixSeal

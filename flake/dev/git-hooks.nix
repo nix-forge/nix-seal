@@ -95,7 +95,7 @@
             };
             ruff-format = {
               enable = true;
-              entry = "${lib.getExe pkgs.ruff} format --check --config pyproject.toml nix/tests/scripts";
+              entry = "${lib.getExe pkgs.ruff} format --check --config pyproject.toml .";
               language = "system";
               always_run = true;
               pass_filenames = false;
@@ -103,7 +103,7 @@
             };
             ruff = {
               enable = true;
-              entry = "${lib.getExe pkgs.ruff} check --no-fix --config pyproject.toml nix/tests/scripts";
+              entry = "${lib.getExe pkgs.ruff} check --no-fix --config pyproject.toml .";
               language = "system";
               always_run = true;
               pass_filenames = false;

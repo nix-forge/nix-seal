@@ -18,7 +18,7 @@ python-version = "3.11"
 python-platform = "all"
 
 [tool.ty.src]
-include = ["nix/tests/scripts/**/*.py"]
+include = ["nix/tests/scripts/**/*.py", ".github/scripts/**/*.py"]
 exclude = ["**/__pycache__"]
 
 [[tool.ty.overrides]]
