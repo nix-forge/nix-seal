@@ -16,8 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      security-events: write # Upload analysis results to code scanning.
-      id-token: write # Authenticate publication to the OpenSSF Scorecard service.
+      security-events: write # Upload code scanning results.
+      id-token: write # Authenticate the configured publication service.
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
