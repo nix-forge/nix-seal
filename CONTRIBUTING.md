@@ -24,3 +24,16 @@ a recorded bootstrap baseline, not an audit claim: reduce them only with a
 documented review or a trusted imported audit. Refresh imports deliberately and
 commit the resulting `supply-chain/imports.lock` change with the dependency
 update.
+
+## Rust source boundaries
+
+The Nix package includes Cargo manifests and configuration, toolchain metadata,
+licenses, crates with their tests and fixtures, and embedded schemas. Workflow,
+documentation and Nix-module edits do not invalidate the Rust package source.
+Documentation and module checks retain their own inputs. Update
+`flake/rust-source.nix` when the Rust build gains another input location.
+
+Run `python3 -m unittest discover -s .github/tests` in the development shell to
+check that metadata edits preserve the source hash while code, schemas, Cargo
+inputs and new fixtures change it. A native package build verifies that the
+filtered source still supplies everything needed by the workspace and its tests.
