@@ -21,7 +21,12 @@ let
     system:
     let
       pkgs = inputs.nixpkgs.legacyPackages.${system};
-      src = lib.cleanSource ../.;
+      # CI, docs and Nix module edits do not change the Rust build. Keep schemas,
+      # test fixtures and Cargo configuration in the explicitly declared source.
+      src = import ./rust-source.nix {
+        inherit lib;
+        root = ../.;
+      };
     in
     pkgs.rustPlatform.buildRustPackage {
       pname = "nix-seal";

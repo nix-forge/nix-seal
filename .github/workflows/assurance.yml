@@ -10,6 +10,7 @@ concurrency:
 jobs:
   miri:
     name: miri
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -27,6 +28,7 @@ jobs:
         run: cargo +nightly miri test -p nix-seal-core --lib
   address-sanitizer:
     name: address-sanitizer
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     permissions:
       contents: read

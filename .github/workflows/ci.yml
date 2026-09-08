@@ -7,7 +7,7 @@ on:
 permissions: {}
 concurrency:
   group: "${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}"
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   legacy-symbols:
     name: legacy-symbols
@@ -85,7 +85,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@a75d21dababfd55145e2df1db81f3d2d865bec59 # v1.0.0
+        uses: nix-forge/ci/actions/setup-nix@7903659c4b16378411a3ea79dd73cec5c82708cc # v2.0.0
         with:
           cache: 'false'
           cache-scope: ci-nix
@@ -104,15 +104,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@a75d21dababfd55145e2df1db81f3d2d865bec59 # v1.0.0
+        uses: nix-forge/ci/actions/setup-nix@7903659c4b16378411a3ea79dd73cec5c82708cc # v2.0.0
         with:
           cache: 'false'
           cache-scope: ci-tooling
-      - name: Materialize partition source
-        run: nix store add-path flake/dev
-      - run: nix develop --command prek run --all-files
-      - run: nix develop --command gitleaks detect --source . --redact --baseline-path=.gitleaks-baseline.json
+      - name: Check shared workflow contracts
+        uses: nix-forge/ci/actions/validate-workflows@7903659c4b16378411a3ea79dd73cec5c82708cc # v2.0.0
+      - name: Test Rust build source boundaries
+        run: python3 -m unittest discover -s .github/tests
+      - name: Run repository hooks and publication checks
+        uses: nix-forge/ci/actions/repository-checks@7903659c4b16378411a3ea79dd73cec5c82708cc # v2.0.0
+        with:
+          history-baseline: .gitleaks-baseline.json
   vet:
     name: vet
     runs-on: ubuntu-latest
@@ -146,7 +151,7 @@ jobs:
           rustup toolchain install 1.97.0 --profile minimal
           rustup override set 1.97.0
       - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@a75d21dababfd55145e2df1db81f3d2d865bec59 # v1.0.0
+        uses: nix-forge/ci/actions/setup-nix@7903659c4b16378411a3ea79dd73cec5c82708cc # v2.0.0
         with:
           cache: 'false'
           cache-scope: ci-audit
@@ -254,4 +259,4 @@ jobs:
       actions: write # Dispatch trusted queue validation.
     steps:
       - name: Notify trusted queue reconciler
-        uses: nix-forge/ci/actions/queue-completion@a75d21dababfd55145e2df1db81f3d2d865bec59 # v1.0.0
+        uses: nix-forge/ci/actions/queue-completion@7903659c4b16378411a3ea79dd73cec5c82708cc # v2.0.0
