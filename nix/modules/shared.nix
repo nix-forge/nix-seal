@@ -13,7 +13,6 @@ args@{
   lib,
   config,
   pkgs,
-  nixSealCatalog ? { },
   ...
 }:
 let
@@ -26,6 +25,13 @@ let
   # embedded Home Manager profile. A standalone Home Manager profile has no
   # host layer and therefore remains responsible for showing it.
   warnExternalAudit = targetKind != "homeManager" || (args.osConfig or null) == null;
+  defaultRuntimeGroup =
+    if homeManagerRuntimeIdentity then
+      (if pkgs.stdenv.hostPlatform.isDarwin then "staff" else config.home.username)
+    else if pkgs.stdenv.hostPlatform.isDarwin then
+      "wheel"
+    else
+      "root";
   privateModeType = types.strMatching "0[1-7]00";
   idIsValid =
     value:
@@ -49,6 +55,25 @@ let
       )
     );
   localIdType = types.addCheck types.str localIdIsValid;
+  # Normalize each list entry before the ordinary module merge. Named option
+  # sets keep priorities and conflicts, including overrides from other modules.
+  declarationsType =
+    elementType:
+    types.coercedTo (types.listOf (types.either localIdType (types.attrsOf types.unspecified))) (
+      entries:
+      lib.zipAttrsWith (_: lib.mkMerge) (
+        map (
+          entry:
+          if builtins.isString entry then
+            if localIdIsValid entry then
+              { ${entry} = { }; }
+            else
+              throw "nixSeal declaration '${entry}' is not a safe local name"
+          else
+            entry
+        ) entries
+      )
+    ) (types.attrsOf elementType);
   activationPhaseType = types.enum [
     "partitioning"
     "users"
@@ -96,7 +121,8 @@ let
       ))
     )
   );
-  administratorCatalog = nixSealCatalog.administrators or { };
+  administratorCatalog = cfg.administrators;
+  templateLib = import ../lib/templates.nix { inherit lib; };
   selectedAdministrator =
     if cfg.administrator != null && builtins.hasAttr cfg.administrator administratorCatalog then
       administratorCatalog.${cfg.administrator}
@@ -113,9 +139,17 @@ let
       "hosts/${lib.removePrefix "host/" targetId}"
     else
       null;
-  derivedTargetName = targetName;
+  derivedTargetName =
+    if targetName != null then
+      targetName
+    else if targetKind == "homeManager" then
+      null
+    else
+      config.networking.hostName;
   derivedTargetId =
-    if derivedTargetName == null then
+    if targetKind == "homeManager" && derivedTargetName == null then
+      "home/${config.home.username}"
+    else if derivedTargetName == null then
       null
     else if targetKind == "homeManager" then
       "home/${config.home.username}/${derivedTargetName}"
@@ -124,8 +158,8 @@ let
   derivedSecretScope =
     if targetKind == "homeManager" then
       "users/${config.home.username}"
-    else if derivedTargetName != null then
-      "hosts/${if targetKind == "nixOs" then "nixos" else "darwin"}/${derivedTargetName}"
+    else if targetName != null then
+      "hosts/${if targetKind == "nixOs" then "nixos" else "darwin"}/${targetName}"
     else if cfg.targetId != null then
       targetScopeFromId cfg.targetId
     else
@@ -238,7 +272,39 @@ let
   bootstrapAuthorizers = lib.filterAttrs (_: identity: identity.kind == "authorizer") (
     projectAdminIdentities // cfg.identities
   );
-  configuredTemplates = lib.filterAttrs (_: template: template.source != null) cfg.templates;
+  declaredTemplates = lib.mapAttrs (
+    name: template:
+    let
+      fail = reason: throw "nixSeal template ${name}: ${reason}";
+      names = templateLib.placeholderNames (builtins.readFile template.renderedSource);
+      bindings = builtins.attrValues template.placeholders;
+    in
+    if template.source == null then
+      fail "set a public source or content"
+    else if
+      template.content != null
+      && toString template.source != toString (builtins.toFile "nix-seal-template" template.content)
+    then
+      fail "set source or content, not both"
+    else if names == [ ] || builtins.length names > 256 then
+      fail "use between 1 and 256 placeholders"
+    else if builtins.attrNames template.placeholders != lib.sort builtins.lessThan names then
+      fail "placeholder overrides must occur in the public text"
+    else if !lib.all (placeholderDef: builtins.hasAttr placeholderDef.secret cfg.secrets) bindings then
+      fail "every placeholder must reference a declared secret"
+    else if
+      !lib.all (placeholderDef: cfg.secrets.${placeholderDef.secret}.phase == template.phase) bindings
+    then
+      fail "every referenced secret must use the template's activation phase"
+    else
+      template
+  ) cfg.templates;
+  configuredTemplates = lib.filterAttrs (
+    _: template:
+    lib.all (placeholderDef: builtins.hasAttr placeholderDef.secret configuredSecrets) (
+      builtins.attrValues template.placeholders
+    )
+  ) declaredTemplates;
   # A systemd credential consumer must restart after a successful generation
   # switch so it receives the new credential mount.  This is part of the
   # canonical target policy as well as the activation document; otherwise the
@@ -251,7 +317,7 @@ let
     template:
     toString (
       builtins.path {
-        path = template.source;
+        path = template.renderedSource;
         name = "nix-seal-template-source";
       }
     );
@@ -329,6 +395,8 @@ let
     # secrets and can never be mistaken for an activation plan.
     # Bootstrap plans retain authorizers, but normal plans never do.
     identities = projectAdminIdentities // cfg.identities;
+    # Templates are runtime outputs, never canonical creation destinations.
+    templates = { };
     secrets = lib.mapAttrs' (
       name: secret:
       lib.nameValuePair (canonicalSecretId name) {
@@ -458,7 +526,10 @@ let
 in
 {
   options.nixSeal = {
-    enable = lib.mkEnableOption "nix-seal pre-release integration";
+    enable = lib.mkEnableOption "nix-seal pre-release integration" // {
+      default = cfg.secrets != { } || cfg.templates != { };
+      defaultText = lib.literalExpression "secrets or templates are declared";
+    };
     package = mkOption {
       type = types.package;
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.nix-seal;
@@ -467,8 +538,18 @@ in
     };
     administrator = mkOption {
       type = types.nullOr idType;
-      default = null;
-      description = "Flake-level administrator catalog entry followed by this target.";
+      default =
+        let
+          names = builtins.attrNames administratorCatalog;
+        in
+        if builtins.length names == 1 then
+          builtins.head names
+        else if names == [ ] then
+          null
+        else
+          throw "nixSeal.administrator: select one of ${lib.concatStringsSep ", " names}, or set null for explicit identity mode";
+      defaultText = "the sole administrator, or null without a catalog";
+      description = "Administrator catalog followed by this target. A single entry is selected automatically; multiple entries require a choice. Explicit null retains unscoped identity mode.";
     };
     targetId = mkOption {
       type = types.nullOr idType;
@@ -479,6 +560,35 @@ in
       type = types.nullOr idType;
       default = null;
       description = "Administrator-relative secret namespace; derived from the target when available.";
+    };
+    administrators = mkOption {
+      type = import ./catalog.nix { inherit lib; };
+      default =
+        (args.nixSealCatalog or (config._module.args.nixSealCatalog or { })).administrators or { };
+      description = "Public administrator catalogs. Ordinary Nix modules can define these directly; the optional flake adapter supplies the default.";
+    };
+    pendingTemplates = mkOption {
+      type = types.attrsOf (types.listOf types.str);
+      readOnly = true;
+      default = lib.mapAttrs (
+        _: template:
+        lib.unique (
+          map (placeholderDef: placeholderDef.secret) (
+            lib.filter (placeholderDef: builtins.hasAttr placeholderDef.secret bootstrapSecrets) (
+              builtins.attrValues template.placeholders
+            )
+          )
+        )
+      ) (lib.filterAttrs (name: _: !(builtins.hasAttr name configuredTemplates)) declaredTemplates);
+      description = "Templates waiting for declared ciphertexts, mapped to the missing local secret names. These templates are excluded from activation until every field exists.";
+    };
+    placeholder = mkOption {
+      type = types.attrsOf types.str;
+      readOnly = true;
+      default = lib.mapAttrs (name: _: "{{nix-seal:${name}}}") (
+        lib.filterAttrs (name: _: builtins.match "[a-z0-9][a-z0-9_.-]{0,127}" name != null) cfg.secrets
+      );
+      description = "Public placeholder strings for declared simple secret names. Interpolate these into a template's Nix content; they contain no secret values. Names containing slashes need an explicit simple placeholder alias instead.";
     };
     secretDirectory = mkOption {
       type = idType;
@@ -494,6 +604,16 @@ in
         Each secret's explicit source overrides this directory.
       '';
     };
+    templateDirectory = mkOption {
+      type = idType;
+      default = "templates";
+      description = ''
+        Repository-relative directory for public templates named <local-name>.template.
+        Only declared templates are loaded. An explicit source or inline content
+        overrides this default. Public templates can be reused across targets;
+        each declaration still controls its own secret bindings and runtime policy.
+      '';
+    };
     sharedSecretDirectory = mkOption {
       type = idType;
       default =
@@ -507,8 +627,18 @@ in
     };
     identityFile = mkOption {
       type = types.nullOr types.str;
+      default =
+        if homeManagerRuntimeIdentity then
+          "${config.home.homeDirectory}/.ssh/id_ed25519"
+        else
+          "/etc/ssh/ssh_host_ed25519_key";
+      defaultText = "~/.ssh/id_ed25519 for Home Manager; /etc/ssh/ssh_host_ed25519_key for systems";
+      description = "Runtime path to the existing target age or SSH identity. Evaluation never reads or generates this private key; activation requires it to exist and match publicKey. Override this path for a dedicated age identity.";
+    };
+    publicKey = mkOption {
+      type = types.nullOr types.str;
       default = null;
-      description = "Runtime path to the target age identity. This path is not copied to the Nix store.";
+      description = "Target age recipient or SSH public key. Expands to identities.target with kind = target. The public key must be supplied explicitly; evaluation never derives it from a private key.";
     };
     planFile = mkOption {
       type = types.nullOr types.path;
@@ -529,12 +659,14 @@ in
           );
       description = "Public, create-only plan for declared canonical sources that do not exist yet. It is never used by activation or provisioning.";
     };
-    repositoryRoot = mkOption {
-      type = types.path;
-      description = "Repository root used only to hash canonical ciphertext sources while compiling plan.v2.";
-    };
+    repositoryRoot =
+      mkOption {
+        type = types.path;
+        description = "Repository root used to resolve canonical ciphertext and public template sources. The optional framework adapter supplies the calling flake root; standalone modules set this once.";
+      }
+      // lib.optionalAttrs (args ? nixSealRepositoryRoot) { default = args.nixSealRepositoryRoot; };
     identities = mkOption {
-      type = types.attrs;
+      type = types.attrsOf types.anything;
       default = { };
       description = "Public administrator, recovery, signer, and target identity declarations used to compile plan.v2.";
     };
@@ -560,6 +692,13 @@ in
     };
     artifactCacheRoot = mkOption {
       type = types.addCheck types.str artifactCacheRootIsSafe;
+      default =
+        if homeManagerRuntimeIdentity then
+          "${config.home.homeDirectory}/${
+            if pkgs.stdenv.hostPlatform.isDarwin then "Library/Caches" else ".cache"
+          }/nix-seal/v1"
+        else
+          "/var/lib/nix-seal/cache/v1";
       description = "Absolute target-local ciphertext cache root. Activation discovers only cryptographically verified matching bundles here.";
     };
     serviceActionTimeout = mkOption {
@@ -585,7 +724,7 @@ in
     };
     secrets = mkOption {
       default = { };
-      type = types.attrsOf (
+      type = declarationsType (
         types.submodule (
           { name, ... }: {
             options = {
@@ -615,11 +754,7 @@ in
               };
               group = mkOption {
                 type = types.str;
-                default =
-                  if homeManagerRuntimeIdentity then
-                    (if pkgs.stdenv.hostPlatform.isDarwin then "staff" else config.home.username)
-                  else
-                    "root";
+                default = defaultRuntimeGroup;
                 description = "Existing runtime group that owns the activated file.";
               };
               mode = mkOption {
@@ -642,13 +777,9 @@ in
               };
               source = mkOption {
                 type = types.nullOr types.str;
-                default =
-                  if cfg.administrator != null && cfg.secretScope != null then
-                    "${
-                      if cfg.secrets.${name}.shared then cfg.sharedSecretDirectory else cfg.secretDirectory
-                    }/${name}.age"
-                  else
-                    null;
+                default = "${
+                  if cfg.secrets.${name}.shared then cfg.sharedSecretDirectory else cfg.secretDirectory
+                }/${name}.age";
                 description = "Repository-relative canonical .age ciphertext source; scoped targets derive this from the configured storage directory and local name. Explicit sources override both directories.";
               };
               delivery = mkOption {
@@ -708,92 +839,159 @@ in
           }
         )
       );
-      description = "Public runtime secret declarations; values never enter Nix evaluation.";
+      description = "Public runtime secret declarations. Accepts an attribute set or a list of names and named option sets. Values never enter Nix evaluation.";
     };
     templates = mkOption {
       default = { };
-      type = types.attrsOf (
-        types.submodule (
-          { name, ... }: {
-            options = {
-              id = mkOption {
-                type = idType;
-                readOnly = true;
-                default = canonicalTemplateId name;
-                description = "Canonical plan ID derived from the selected administrator and target scope.";
-              };
-              path = mkOption {
-                type = types.str;
-                readOnly = true;
-                default = "${phaseRuntimeDirectory config.nixSeal.templates.${name}.phase}/current/templates/${
-                  config.nixSeal.templates.${name}.id
-                }";
-                description = "Runtime path of the atomically rendered template.";
-              };
-              phase = mkOption {
-                type = activationPhaseType;
-                default = "activation";
-                description = "Activation generation that renders this template.";
-              };
-              source = mkOption {
-                type = types.nullOr types.path;
-                default = null;
-                description = "Public template source. This file may enter the Nix store.";
-              };
-              placeholders = mkOption {
-                default = { };
-                type = types.attrsOf (
-                  types.submodule {
-                    options = {
-                      secret = mkOption {
-                        type = localIdType;
-                        description = "Local ID of the secret inserted at this placeholder.";
-                      };
-                      encoding = mkOption {
-                        type = types.enum [
-                          "utf8"
-                          "base64"
-                          "hex"
-                        ];
-                        default = "utf8";
-                        description = "Explicit transformation applied while streaming the secret.";
-                      };
-                    };
-                  }
+      type = declarationsType (
+        types.coercedTo (types.addCheck types.path builtins.isPath) (source: { inherit source; }) (
+          types.coercedTo types.str (content: { inherit content; }) (
+            types.submodule (
+              { name, ... }: {
+                options = {
+                  id = mkOption {
+                    type = idType;
+                    readOnly = true;
+                    default = canonicalTemplateId name;
+                    description = "Canonical plan ID derived from the selected administrator and target scope.";
+                  };
+                  path = mkOption {
+                    type = types.str;
+                    readOnly = true;
+                    default = "${phaseRuntimeDirectory config.nixSeal.templates.${name}.phase}/current/templates/${
+                      config.nixSeal.templates.${name}.id
+                    }";
+                    description = "Runtime path of the atomically rendered template.";
+                  };
+                  phase = mkOption {
+                    type = activationPhaseType;
+                    default =
+                      let
+                        phases = lib.unique (
+                          map (
+                            binding:
+                            if builtins.hasAttr binding.secret cfg.secrets then
+                              cfg.secrets.${binding.secret}.phase
+                            else
+                              throw "nixSeal template ${name}: every placeholder must reference a declared secret"
+                          ) (builtins.attrValues cfg.templates.${name}.placeholders)
+                        );
+                      in
+                      if phases == [ ] then
+                        "activation"
+                      else if builtins.length phases == 1 then
+                        builtins.head phases
+                      else
+                        throw "nixSeal template ${name}: referenced secrets must share an activation phase";
+                    defaultText = "the activation phase shared by its referenced secrets";
+                    description = "Activation generation that renders this template. Defaults to the referenced secrets' common phase; it never moves a secret to another phase.";
+                  };
+                  source = mkOption {
+                    type = types.nullOr types.path;
+                    default =
+                      if cfg.templates.${name}.content != null then
+                        builtins.toFile "nix-seal-template" cfg.templates.${name}.content
+                      else if !localIdIsValid name then
+                        throw "nixSeal template ${name}: the local name is not a safe template ID"
+                      else
+                        let
+                          source = cfg.repositoryRoot + "/${cfg.templateDirectory}/${name}.template";
+                        in
+                        if builtins.pathExists source then
+                          source
+                        else
+                          throw "nixSeal template ${name}: create ${cfg.templateDirectory}/${name}.template or set source/content";
+                    description = "Public template source, defaulting to <templateDirectory>/<name>.template. This file may enter the Nix store. Set either source or content to override the named file.";
+                  };
+                  content = mkOption {
+                    type = types.nullOr types.lines;
+                    default = null;
+                    description = "Public template text with {{nix-seal:name}} placeholders. Never put secret values here.";
+                  };
+                  publicValues = mkOption {
+                    type = types.attrsOf types.str;
+                    default = { };
+                    description = "Public strings substituted for {{public:name}} during Nix evaluation, before secret rendering at activation. These values enter the public Nix store. Missing or unused bindings and nested markers are rejected. Values are literal text, with no automatic escaping.";
+                  };
+                  renderedSource = mkOption {
+                    type = types.nullOr types.path;
+                    readOnly = true;
+                    default =
+                      let
+                        template = cfg.templates.${name};
+                        original = builtins.readFile template.source;
+                        rendered = builtins.addErrorContext "while rendering public values for nixSeal.templates.${name}:" (
+                          templateLib.renderPublic original template.publicValues
+                        );
+                      in
+                      if template.source == null then
+                        null
+                      else if rendered == original then
+                        template.source
+                      else
+                        builtins.toFile "nix-seal-template" rendered;
+                    description = "Public template after publicValues substitution; secret markers remain unresolved. The plan and runtime use this generated source.";
+                  };
+                  placeholders = mkOption {
+                    default = { };
+                    type = types.attrsOf (
+                      types.coercedTo localIdType (secret: { inherit secret; }) (
+                        types.submodule {
+                          options = {
+                            secret = mkOption {
+                              type = localIdType;
+                              description = "Local ID of the secret inserted at this placeholder.";
+                            };
+                            encoding = mkOption {
+                              type = types.enum [
+                                "utf8"
+                                "base64"
+                                "hex"
+                              ];
+                              default = "utf8";
+                              description = "Explicit transformation applied while streaming the secret.";
+                            };
+                          };
+                        }
+                      )
+                    );
+                    description = "Placeholder overrides. Names in the public text default to same-named declared secrets. Use a secret name string or an attribute set with secret and encoding.";
+                  };
+                  owner = mkOption {
+                    type = types.str;
+                    default = if homeManagerRuntimeIdentity then config.home.username else "root";
+                    description = "Existing runtime account that owns the rendered file.";
+                  };
+                  group = mkOption {
+                    type = types.str;
+                    default = defaultRuntimeGroup;
+                    description = "Existing runtime group that owns the rendered file.";
+                  };
+                  mode = mkOption {
+                    type = privateModeType;
+                    default = "0400";
+                  };
+                  restartUnits = mkOption {
+                    type = types.listOf unitType;
+                    default = [ ];
+                  };
+                  reloadUnits = mkOption {
+                    type = types.listOf unitType;
+                    default = [ ];
+                  };
+                };
+                config.placeholders = lib.mkIf (cfg.templates.${name}.source != null) (
+                  lib.genAttrs (templateLib.placeholderNames (builtins.readFile cfg.templates.${name}.renderedSource))
+                    (placeholderDef: {
+                      secret = lib.mkDefault placeholderDef;
+                    })
                 );
-                description = "Strict {{nix-seal:name}} placeholder declarations.";
-              };
-              owner = mkOption {
-                type = types.str;
-                default = if homeManagerRuntimeIdentity then config.home.username else "root";
-                description = "Existing runtime account that owns the rendered file.";
-              };
-              group = mkOption {
-                type = types.str;
-                default =
-                  if homeManagerRuntimeIdentity then
-                    (if pkgs.stdenv.hostPlatform.isDarwin then "staff" else config.home.username)
-                  else
-                    "root";
-                description = "Existing runtime group that owns the rendered file.";
-              };
-              mode = mkOption {
-                type = privateModeType;
-                default = "0400";
-              };
-              restartUnits = mkOption {
-                type = types.listOf unitType;
-                default = [ ];
-              };
-              reloadUnits = mkOption {
-                type = types.listOf unitType;
-                default = [ ];
-              };
-            };
-          }
+              }
+            )
+          )
         )
       );
-      description = "Runtime-rendered non-store template outputs.";
+      description = "Runtime-rendered template outputs. Accepts an attribute set or a list of names and named option sets. Each output accepts public text, a public file, or full options.";
     };
     activationSpec = mkOption {
       type = types.path;
@@ -812,6 +1010,12 @@ in
   config = mkIf cfg.enable (
     lib.mkMerge [
       {
+        nixSeal.identities = lib.mkIf (cfg.publicKey != null) {
+          target = {
+            kind = "target";
+            public = cfg.publicKey;
+          };
+        };
         nixSeal.target = lib.mkDefault (
           {
             kind = targetKind;
@@ -884,48 +1088,6 @@ in
           }
           {
             assertion =
-              builtins.length (builtins.attrNames configuredTemplates)
-              == builtins.length (builtins.attrNames cfg.templates);
-            message = "every declared nixSeal template requires a public source";
-          }
-          {
-            assertion = lib.all (
-              template:
-              template.placeholders != { } && builtins.length (builtins.attrNames template.placeholders) <= 256
-            ) (builtins.attrValues configuredTemplates);
-            message = "every nixSeal template requires between 1 and 256 declared placeholders";
-          }
-          {
-            assertion = lib.all (
-              template:
-              lib.all (name: builtins.match "[a-z0-9][a-z0-9_.-]{0,127}" name != null) (
-                builtins.attrNames template.placeholders
-              )
-            ) (builtins.attrValues configuredTemplates);
-            message = "nixSeal template placeholder names must be lowercase stable names";
-          }
-          {
-            assertion = lib.all (
-              template:
-              lib.all (placeholderDef: builtins.hasAttr placeholderDef.secret configuredSecrets) (
-                builtins.attrValues template.placeholders
-              )
-            ) (builtins.attrValues configuredTemplates);
-            message = "every nixSeal template placeholder must reference a configured secret";
-          }
-          {
-            assertion = lib.all (
-              template:
-              lib.all (
-                placeholderDef:
-                builtins.hasAttr placeholderDef.secret configuredSecrets
-                && cfg.secrets.${placeholderDef.secret}.phase == template.phase
-              ) (builtins.attrValues template.placeholders)
-            ) (builtins.attrValues configuredTemplates);
-            message = "every nixSeal template may reference secrets from exactly its own activation phase";
-          }
-          {
-            assertion =
               lib.intersectLists (builtins.attrNames configuredSecrets) (
                 map (name: "templates/${name}") (builtins.attrNames configuredTemplates)
               ) == [ ];
@@ -952,7 +1114,12 @@ in
             message = "a systemd service credential name may be mapped by only one nixSeal secret";
           }
         ];
-        warnings = lib.optional warnExternalAudit "nix-seal is pre-1.0 and has not passed its required external security audit";
+        warnings =
+          lib.optional warnExternalAudit "nix-seal is pre-1.0 and has not passed its required external security audit"
+          ++ lib.mapAttrsToList (
+            name: missing:
+            "nixSeal template ${name} is pending creation of: ${lib.concatStringsSep ", " missing}"
+          ) cfg.pendingTemplates;
       }
       (serviceCredentialConfig serviceCredentialBindings)
     ]

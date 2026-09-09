@@ -241,8 +241,317 @@ let
       }
     ];
   };
+  nativeConfiguration = inputs.nixpkgs.lib.nixosSystem {
+    inherit system;
+    modules = [
+      self.nixosModules.default
+      {
+        networking.hostName = "native";
+        system.stateVersion = "26.05";
+        nixSeal = {
+          enable = true;
+          administrator = "alice";
+          inherit (scopedCatalog) administrators;
+          identityFile = "/run/keys/target";
+          repositoryRoot = scopedRepositoryRoot;
+          secretDirectory = "hosts/shared";
+          identities.target = identities.target;
+          secrets.nix-access-tokens = { };
+          secrets.pending = { };
+          templates.ready = "token={{nix-seal:nix-access-tokens}}\n";
+          templates.from-file = ./fixtures/templates/token.conf;
+          templates.named = { };
+          templates.aliased = {
+            content = "token={{nix-seal:token}}\n";
+            placeholders.token = "nix-access-tokens";
+          };
+          templates.waiting = "token={{nix-seal:pending}}\n";
+        };
+      }
+    ];
+  };
+  nativeHome =
+    (inputs.home-manager.lib.homeManagerConfiguration {
+      inherit pkgs;
+      modules = [
+        self.homeManagerModules.default
+        {
+          home.username = "tester";
+          home.homeDirectory = "/home/tester";
+          home.stateVersion = "26.05";
+          nixSeal = {
+            identities = identities // {
+              bootstrap-authorizer = scopedCatalog.administrators.alice.identities.bootstrap-authorizer;
+            };
+            repositoryRoot = scopedRepositoryRoot;
+            secrets = [ "token" ];
+          };
+        }
+      ];
+    }).config.nixSeal;
+  nativeDarwin =
+    (inputs.nix-darwin.lib.darwinSystem {
+      system = "aarch64-darwin";
+      modules = [
+        self.darwinModules.default
+        {
+          networking.hostName = "native";
+          system.stateVersion = 6;
+          nixSeal = {
+            identities = identities // {
+              bootstrap-authorizer = scopedCatalog.administrators.alice.identities.bootstrap-authorizer;
+            };
+            repositoryRoot = scopedRepositoryRoot;
+            secrets = [ "token" ];
+            templates.service = "{{nix-seal:token}}";
+          };
+        }
+      ];
+    }).config.nixSeal;
+  native = nativeConfiguration.config.nixSeal;
+  conciseConfiguration = lib.nixosSystem {
+    inherit system;
+    specialArgs = {
+      nixSealCatalog.administrators.alice = scopedCatalog.administrators.alice;
+      nixSealRepositoryRoot = scopedRepositoryRoot;
+    };
+    modules = [
+      self.nixosModules.default
+      {
+        networking.hostName = "native";
+        system.stateVersion = "26.05";
+        nixSeal = {
+          publicKey = identities.target.public;
+          secretDirectory = "hosts/shared";
+          secrets = [
+            "nix-access-tokens"
+            "pending"
+            { pending.mode = lib.mkDefault "0600"; }
+          ];
+          templates = [
+            "named"
+            { inline = "{{nix-seal:nix-access-tokens}}"; }
+          ];
+        };
+      }
+      { nixSeal.secrets.pending.mode = "0400"; }
+    ];
+  };
+  concise = conciseConfiguration.config.nixSeal;
+  promoted =
+    (nativeConfiguration.extendModules {
+      modules = [ { nixSeal.secrets.pending.source = "hosts/shared/nix-access-tokens.age"; } ];
+    }).config.nixSeal;
+  templatePlanSucceeds =
+    settings:
+    (builtins.tryEval (
+      builtins.deepSeq
+        (nativeConfiguration.extendModules { modules = [ { nixSeal.templates.test = settings; } ]; })
+        .config.nixSeal.planFile
+        true
+    )).success;
+
 in
 {
+  public-template-values =
+    let
+      templates = import ../lib/templates.nix { inherit lib; };
+      raw = "{{nix-seal:nix-access-tokens}} {{public:key}} {{public:key}}\n";
+      expected = "{{nix-seal:nix-access-tokens}} ssh-ed25519 fixture ssh-ed25519 fixture\n";
+      withValues = nativeConfiguration.extendModules {
+        modules = [
+          {
+            nixSeal.templates.public-example = {
+              content = raw;
+              publicValues.key = "ssh-ed25519 fixture";
+            };
+          }
+        ];
+      };
+      rejects = content: values: !(builtins.tryEval (templates.renderPublic content values)).success;
+    in
+    assert templates.renderPublic raw { key = "ssh-ed25519 fixture"; } == expected;
+    assert
+      builtins.readFile withValues.config.nixSeal.templates.public-example.renderedSource == expected;
+    assert
+      builtins.attrNames withValues.config.nixSeal.templates.public-example.placeholders
+      == [ "nix-access-tokens" ];
+    assert rejects raw { };
+    assert rejects raw {
+      key = "value";
+      unused = "unused";
+    };
+    assert rejects "{{public:invalid name}}" { };
+    assert rejects raw { key = "{{nix-seal:pending}}"; };
+    assert rejects raw { key = "{{public:other}}"; };
+    assert rejects "{{public:key}}{nix-seal:pending}}" { key = "{"; };
+    assert rejects (lib.concatStrings (lib.replicate 3 "{{public:key}}")) {
+      key = lib.concatStrings (lib.replicate 1024 (lib.concatStrings (lib.replicate 1024 "x")));
+    };
+    assert templates.renderPublic "{{nix-seal:token}}" { } == "{{nix-seal:token}}";
+    assert templates.renderPublic "{{public:value}}" { value = ""; } == "";
+    pkgs.runCommand "nix-seal-public-template-values"
+      { nativeBuildInputs = [ self.packages.${system}.nix-seal ]; }
+      ''
+        nix-seal check --nix-plan ${withValues.config.nixSeal.planFile}
+        nix-seal template check --plan ${withValues.config.nixSeal.planFile}
+        touch $out
+      '';
+  concise-authoring =
+    let
+      ambiguous = conciseConfiguration.extendModules {
+        modules = [ { nixSeal.administrators = scopedCatalog.administrators; } ];
+      };
+      disabled = conciseConfiguration.extendModules { modules = [ { nixSeal.enable = false; } ]; };
+      unscoped = conciseConfiguration.extendModules { modules = [ { nixSeal.administrator = null; } ]; };
+    in
+    assert concise.enable;
+    assert !disabled.config.nixSeal.enable;
+    assert
+      !(conciseConfiguration.extendModules {
+        modules = [
+          {
+            nixSeal.secrets = lib.mkForce { };
+            nixSeal.templates = lib.mkForce { };
+          }
+        ];
+      }).config.nixSeal.enable;
+    assert concise.administrator == "alice";
+    assert unscoped.config.nixSeal.administrator == null;
+    assert !(builtins.tryEval ambiguous.config.nixSeal.administrator).success;
+    assert concise.identityFile == "/etc/ssh/ssh_host_ed25519_key";
+    assert concise.identities.target == identities.target;
+    assert concise.placeholder.nix-access-tokens == "{{nix-seal:nix-access-tokens}}";
+    assert !(concise.placeholder ? undeclared);
+    assert
+      (conciseConfiguration.extendModules {
+        modules = [
+          ({ config, ... }: {
+            nixSeal.templates.interpolated = "TOKEN=${config.nixSeal.placeholder.nix-access-tokens}";
+          })
+        ];
+      }).config.nixSeal.templates.interpolated.placeholders.nix-access-tokens.secret
+      == "nix-access-tokens";
+    assert concise.repositoryRoot == scopedRepositoryRoot;
+    assert concise.secrets.pending.mode == "0400";
+    assert
+      builtins.attrNames concise.secrets == [
+        "nix-access-tokens"
+        "pending"
+      ];
+    assert
+      builtins.attrNames concise.templates == [
+        "inline"
+        "named"
+      ];
+    assert concise.templates.named.placeholders.nix-access-tokens.secret == "nix-access-tokens";
+    assert
+      !(builtins.tryEval
+        (conciseConfiguration.extendModules { modules = [ { nixSeal.secrets = [ "../outside" ]; } ]; })
+        .config.nixSeal.secrets
+      ).success;
+    assert
+      !(builtins.tryEval
+        (conciseConfiguration.extendModules {
+          modules = [ { nixSeal.identities.target.public = "conflicting-public-key"; } ];
+        }).config.nixSeal.identities.target.public
+      ).success;
+    assert
+      (conciseConfiguration.extendModules {
+        modules = [ { nixSeal.secrets.nix-access-tokens.phase = "services"; } ];
+      }).config.nixSeal.templates.named.phase == "services";
+    assert
+      !(builtins.tryEval
+        (conciseConfiguration.extendModules {
+          modules = [
+            {
+              nixSeal.secrets.nix-access-tokens.phase = "services";
+              nixSeal.templates.mixed = "{{nix-seal:nix-access-tokens}}{{nix-seal:pending}}";
+            }
+          ];
+        }).config.nixSeal.templates.mixed.phase
+      ).success;
+    pkgs.runCommand "nix-seal-concise-authoring"
+      { nativeBuildInputs = [ self.packages.${system}.nix-seal ]; }
+      ''
+        nix-seal check --nix-plan ${concise.planFile}
+        touch $out
+      '';
+  native-authoring =
+    assert native.targetId == "host/nixos/native";
+    assert native.templateDirectory == "templates";
+    assert
+      toString native.templates.named.source
+      == toString (scopedRepositoryRoot + "/templates/named.template");
+    assert
+      !(builtins.tryEval
+        (nativeConfiguration.extendModules { modules = [ { nixSeal.templateDirectory = "../outside"; } ]; })
+        .config.nixSeal.templateDirectory
+      ).success;
+    assert
+      !(builtins.tryEval
+        (nativeConfiguration.extendModules { modules = [ { nixSeal.templates.absent = { }; } ]; })
+        .config.nixSeal.templates.absent.source
+      ).success;
+    assert
+      toString
+        (nativeConfiguration.extendModules {
+          modules = [
+            {
+              nixSeal.templateDirectory = "not-present";
+              nixSeal.templates.named.source = ./fixtures/templates/token.conf;
+            }
+          ];
+        }).config.nixSeal.templates.named.source == toString ./fixtures/templates/token.conf;
+    assert nativeHome.targetId == "home/tester";
+    assert nativeHome.enable;
+    assert nativeHome.identityFile == "/home/tester/.ssh/id_ed25519";
+    assert nativeHome.secrets.token.source == "secrets/token.age";
+    assert nativeDarwin.targetId == "host/darwin/native";
+    assert nativeDarwin.enable;
+    assert nativeDarwin.identityFile == "/etc/ssh/ssh_host_ed25519_key";
+    assert nativeDarwin.secrets.token.group == "wheel";
+    assert nativeDarwin.templates.service.group == "wheel";
+    assert native.secretScope == "hosts/nixos/native";
+    assert native.artifactCacheRoot == "/var/lib/nix-seal/cache/v1";
+    assert native.secrets.nix-access-tokens.source == "hosts/shared/nix-access-tokens.age";
+    assert native.pendingTemplates == { waiting = [ "pending" ]; };
+    assert promoted.pendingTemplates == { };
+    assert promoted.bootstrapPlanFile == null;
+    assert native.templates.ready.placeholders.nix-access-tokens.secret == "nix-access-tokens";
+    assert native.templates.aliased.placeholders.token.secret == "nix-access-tokens";
+    assert !templatePlanSucceeds "value={{nix-seal:undeclared}}";
+    assert
+      !templatePlanSucceeds {
+        content = "{{nix-seal:nix-access-tokens}}";
+        placeholders.unused = "pending";
+      };
+    assert
+      !templatePlanSucceeds {
+        content = "{{nix-seal:nix-access-tokens}}";
+        phase = "services";
+      };
+    assert !templatePlanSucceeds "{{nix-seal:bad name}}";
+    pkgs.runCommand "nix-seal-native-authoring"
+      {
+        nativeBuildInputs = [
+          pkgs.jq
+          self.packages.${system}.nix-seal
+        ];
+      }
+      ''
+        nix-seal check --nix-plan ${native.planFile}
+        nix-seal template check --plan ${native.planFile}
+        jq -e '
+          (.templates | keys == ["alice/hosts/nixos/native/aliased", "alice/hosts/nixos/native/from-file", "alice/hosts/nixos/native/named", "alice/hosts/nixos/native/ready"]) and
+          (.secrets | keys == ["alice/hosts/nixos/native/nix-access-tokens"])
+        ' ${native.planFile} >/dev/null
+        jq -e '
+          (.templates == {}) and
+          (.secrets | keys == ["alice/hosts/nixos/native/pending"])
+        ' ${native.bootstrapPlanFile} >/dev/null
+        touch "$out"
+      '';
   plan-v2 =
     assert
       (builtins.fromJSON (
@@ -431,6 +740,47 @@ in
       builtins.elem "setupLaunchAgents" standaloneHomeConfiguration.config.home.activation.nixSealServices.after
       == pkgs.stdenv.hostPlatform.isDarwin;
     pkgs.runCommand "nix-seal-home-service-activation-order" { } "touch $out";
+  embedded-home-runtime-environment =
+    let
+      integrated =
+        volatile:
+        standaloneHomeConfiguration.extendModules {
+          specialArgs.osConfig.nixSeal = {
+            enable = true;
+            linux.volatileRuntime.enable = volatile;
+          };
+        };
+      exercise =
+        volatile:
+        let
+          home = (integrated volatile).config;
+        in
+        ''
+          (
+            unset XDG_RUNTIME_DIR
+            ${home.home.activation.nixSeal.data}
+            test "$XDG_RUNTIME_DIR" = "/run/user/$(${pkgs.coreutils}/bin/id -u)"
+            export XDG_RUNTIME_DIR="$TMPDIR/custom-runtime"
+            ${home.home.activation.nixSealServices.data}
+            test "$XDG_RUNTIME_DIR" = "$TMPDIR/custom-runtime"
+          )
+        '';
+    in
+    pkgs.runCommand "nix-seal-embedded-home-runtime-environment" { } ''
+      run() { :; }
+      ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+        ${exercise true}
+        ${exercise false}
+        if (
+          unset XDG_RUNTIME_DIR
+          ${standaloneHomeConfiguration.config.home.activation.nixSeal.data}
+        ); then
+          echo "standalone activation accepted a missing runtime environment" >&2
+          exit 1
+        fi
+      ''}
+      touch "$out"
+    '';
   home-dry-activation = pkgs.runCommand "nix-seal-home-dry-activation" { } ''
     export DRY_RUN=1
     export XDG_RUNTIME_DIR="$TMPDIR/runtime"

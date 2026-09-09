@@ -123,6 +123,12 @@ in
       checks = {
         nix-seal = nixSeal;
         inherit documentation;
+        bootstrap-terminal =
+          pkgs.runCommand "nix-seal-bootstrap-terminal" { nativeBuildInputs = [ pkgs.python3 ]; }
+            ''
+              python3 ${../nix/tests/scripts/bootstrap-tty.py} ${nixSeal}/bin/nix-seal
+              touch "$out"
+            '';
       }
       // import ../nix/tests/bash-writers.nix { inherit pkgs; }
       // import ../nix/tests/module-evaluation.nix {

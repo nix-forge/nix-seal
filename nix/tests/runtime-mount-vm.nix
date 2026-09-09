@@ -15,7 +15,11 @@ let
       ({ lib, ... }: {
         options.home-manager.users = lib.mkOption {
           type = lib.types.attrs;
-          default.tester = { };
+          default.tester.nixSeal = {
+            enable = true;
+            secrets.token.restartUnits = [ "example.service" ];
+            templates.token = { };
+          };
         };
         config = {
           system.stateVersion = "26.05";
@@ -45,6 +49,15 @@ pkgs.testers.nixosTest {
   name = "nix-seal-runtime-mount";
   nodes.machine = {
     environment.systemPackages = [ pkgs.git ];
+    systemd.services.home-manager-tester.serviceConfig = {
+      Type = "oneshot";
+      User = "tester";
+      ExecStartPre = fixture.config.systemd.services.home-manager-tester.serviceConfig.ExecStartPre;
+      ExecStart = pkgs.writeShellScript "check-user-manager" ''
+        export XDG_RUNTIME_DIR="/run/user/$(${pkgs.coreutils}/bin/id -u)"
+        ${pkgs.systemd}/bin/systemctl --user show-environment >/dev/null
+      '';
+    };
     virtualisation.fileSystems."/run/nix-seal" = fixture.config.fileSystems."/run/nix-seal";
     environment.etc."nix-seal-runtime-activation".source =
       fixture.config.system.activationScripts.nixSealRuntime.text;
@@ -59,6 +72,9 @@ pkgs.testers.nixosTest {
     machine.wait_for_unit("multi-user.target")
     machine.succeed("useradd -m tester")
 
+    with subtest("embedded activation reaches a user manager without a login or fixed UID"):
+        machine.succeed("systemctl start home-manager-tester.service")
+
     with subtest("repeated activation preserves Git identity and the mount"):
         machine.succeed("/etc/nix-seal-runtime-activation")
         machine.succeed("bash /etc/nix-seal-runtime-users")
@@ -71,6 +87,7 @@ pkgs.testers.nixosTest {
         assert machine.succeed("findmnt -rn -o ID --mountpoint /run/nix-seal") == mount_before
 
     with subtest("first activation precedes account creation"):
+        machine.succeed("systemctl stop user@$(id -u tester).service")
         machine.succeed("userdel tester")
         machine.succeed("umount --all-targets /run/nix-seal")
         machine.succeed("rmdir /run/nix-seal")

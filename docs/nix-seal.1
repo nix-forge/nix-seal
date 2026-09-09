@@ -81,3 +81,15 @@ activation failures.
 .BR age (1)
 .PP
 Project documentation: https://github.com/nix-forge/nix-seal
+.SH NIX AUTHORING
+The Nix modules accept public template text, a public Nix path, or full template
+options. Placeholder names default to same-named declared secrets. Explicit
+mappings and encodings override those defaults. Pending templates are reported
+by nixSeal.pendingTemplates and are excluded from activation until their
+ciphertext fields exist. See docs/nix-authoring.md for setup and examples.
+.PP
+secret bootstrap complete accepts an unambiguous local name with --secret.
+The --interactive flag reads a hidden value from the controlling terminal;
+Enter ends a single line without retaining the newline. Add --multiline to
+preserve line endings and finish with Ctrl-D. Non-interactive stdin remains the
+default. The authorizer key and separate bootstrap plan are still required.
