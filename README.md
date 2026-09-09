@@ -384,9 +384,15 @@ artifacts require `provision` and `artifact approve` with the required signers.
 NixOS checks all declared caches before switching or selecting a new boot
 configuration. A missing artifact stops the switch before services stop. Home
 Manager also checks before writing the home environment. These checks do not
-need private keys. Nix-darwin supports preparation and explicit readiness but
-does not yet have the NixOS pre-switch hook. A successful readiness check does not
-guarantee later service startup, and activation rechecks signatures and expiry.
+need private keys. Nix-darwin checks system and embedded home caches at the start
+of activation, before nix-seal runtime preparation and the ordinary activation
+phases. A failed check lists missing artifacts and gives a preparation command
+for that configuration. This also covers hosts with only home secrets and hosts
+using persistent runtime storage. An embedded home cache is checked as its user;
+the account must already exist. Nix-darwin has no NixOS-style pre-switch hook, so
+this check cannot prevent the calling switch tool from updating its system profile.
+A successful readiness check does not guarantee later service startup, and
+activation rechecks signatures and expiry.
 
 ### Target-local artifact cache (recommended)
 

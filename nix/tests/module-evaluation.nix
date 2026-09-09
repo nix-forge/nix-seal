@@ -289,25 +289,25 @@ let
         }
       ];
     }).config.nixSeal;
-  nativeDarwin =
-    (inputs.nix-darwin.lib.darwinSystem {
-      system = "aarch64-darwin";
-      modules = [
-        self.darwinModules.default
-        {
-          networking.hostName = "native";
-          system.stateVersion = 6;
-          nixSeal = {
-            identities = identities // {
-              bootstrap-authorizer = scopedCatalog.administrators.alice.identities.bootstrap-authorizer;
-            };
-            repositoryRoot = scopedRepositoryRoot;
-            secrets = [ "token" ];
-            templates.service = "{{nix-seal:token}}";
+  nativeDarwinConfiguration = inputs.nix-darwin.lib.darwinSystem {
+    system = "aarch64-darwin";
+    modules = [
+      self.darwinModules.default
+      {
+        networking.hostName = "native";
+        system.stateVersion = 6;
+        nixSeal = {
+          identities = identities // {
+            bootstrap-authorizer = scopedCatalog.administrators.alice.identities.bootstrap-authorizer;
           };
-        }
-      ];
-    }).config.nixSeal;
+          repositoryRoot = scopedRepositoryRoot;
+          secrets = [ "token" ];
+          templates.service = "{{nix-seal:token}}";
+        };
+      }
+    ];
+  };
+  nativeDarwin = nativeDarwinConfiguration.config.nixSeal;
   native = nativeConfiguration.config.nixSeal;
   conciseConfiguration = lib.nixosSystem {
     inherit system;
@@ -353,6 +353,87 @@ let
 
 in
 {
+  darwin-deployment-readiness =
+    let
+      integrated = nativeDarwinConfiguration.extendModules {
+        modules = [
+          { nixSeal.secrets.token.source = "hosts/shared/nix-access-tokens.age"; }
+          ({ lib, ... }: {
+            options.home-manager.users = lib.mkOption {
+              type = lib.types.attrs;
+              default.tester = standaloneHomeConfiguration.config;
+            };
+          })
+        ];
+      };
+      persistent = integrated.extendModules {
+        modules = [ { nixSeal.darwin.volatileRuntime.enable = false; } ];
+      };
+      homeOnly = integrated.extendModules { modules = [ { nixSeal.enable = lib.mkForce false; } ]; };
+      # Replace only executable paths; exercise the generated shell control flow.
+      script =
+        configuration:
+        builtins.unsafeDiscardStringContext (
+          lib.replaceStrings
+            [ (lib.getExe configuration.config.nixSeal.package) "/usr/bin/sudo" ]
+            [ "\"$PWD/nix-seal\"" "\"$PWD/sudo\"" ]
+            configuration.config.system.activationScripts.preActivation.text
+        );
+    in
+    pkgs.runCommand "nix-seal-darwin-deployment-readiness" { } ''
+      cat > nix-seal <<'EOF'
+      #!${pkgs.runtimeShell}
+      if [ "$1" = readiness ]; then
+        echo "check:''${TEST_OWNER:-root}" >> "$PWD/events"
+        if [ "''${TEST_OWNER:-root}" = "$FAIL_OWNER" ]; then
+          echo "target-local cache lacks verified artifacts" >&2
+          exit 1
+        fi
+      else
+        echo runtime >> "$PWD/events"
+      fi
+      EOF
+      cat > sudo <<'EOF'
+      #!${pkgs.runtimeShell}
+      test "$1" = -H && test "$2" = -u && test "$4" = -- || exit 2
+      export TEST_OWNER="$3"
+      shift 4
+      exec "$@"
+      EOF
+      chmod +x nix-seal sudo
+      export FAIL_OWNER=root
+      if ${pkgs.runtimeShell} ${pkgs.writeText "darwin-preactivation" (script integrated)} 2> error; then
+        echo "Darwin accepted missing system artifacts" >&2
+        exit 1
+      fi
+      grep -q 'target-local cache lacks verified artifacts' error
+      grep -q 'nix-seal prepare --deployment' error
+      printf 'check:root\ncheck:tester\n' > expected
+      diff -u expected events
+      export FAIL_OWNER=tester
+      : > events
+      if ${pkgs.runtimeShell} ${pkgs.writeText "darwin-preactivation" (script integrated)} 2> error; then
+        echo "Darwin accepted missing home artifacts" >&2
+        exit 1
+      fi
+      diff -u expected events
+      export FAIL_OWNER=none
+      : > events
+      ${pkgs.runtimeShell} ${pkgs.writeText "darwin-preactivation" (script integrated)}
+      printf 'runtime\n' >> expected
+      diff -u expected events
+      export FAIL_OWNER=tester
+      for script in ${pkgs.writeText "darwin-persistent-preactivation" (script persistent)} ${pkgs.writeText "darwin-home-only-preactivation" (script homeOnly)}; do
+        : > events
+        if ${pkgs.runtimeShell} "$script" 2> error; then
+          echo "Darwin skipped readiness without a system volatile runtime" >&2
+          exit 1
+        fi
+        grep -q 'check:tester' events
+        if grep -q runtime events; then exit 1; fi
+      done
+      touch "$out"
+    '';
   deployment-readiness =
     let
       integrated = configuration.extendModules {
@@ -390,11 +471,15 @@ in
       }
       ''
         jq -e '.schema == "nix-seal.deployment.v1" and (.targets | length) == 2' ${integrated.config.nixSeal.deploymentFile}
-        if nix-seal readiness --spec ${configuration.config.nixSeal.activationSpecs.activation} --json > report.json; then
+        # The host may already have a private cache. Test an absent cache inside
+        # the sandbox so readiness diagnoses missing artifacts, not permissions.
+        jq --arg cache "$TMPDIR/empty-cache" '.artifactCacheRoot = $cache' \
+          ${configuration.config.nixSeal.activationSpecs.activation} > activation.json
+        if nix-seal readiness --spec "$PWD/activation.json" --json > report.json; then
           echo "readiness accepted an unprepared system" >&2
           exit 1
         fi
-        jq -e '.ready == false and (.artifacts[0].missing | length) > 0' report.json
+        jq -e '.ready == false and (.errors | length) == 0 and (.artifacts[0].missing | length) > 0' report.json
         touch "$out"
       '';
   public-template-values =

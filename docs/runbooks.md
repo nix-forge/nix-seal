@@ -151,6 +151,15 @@ cache owner, and verifies readiness. Retry the normal switch afterward. For a
 failed switch into an already built NixOS system, use `--deployment` with that
 system path to prepare its exact plans. Existing cache generations are retained.
 
+On nix-darwin, use `--flake .#darwinConfigurations.workstation`. Activation checks
+both system and embedded home caches before preparing the nix-seal runtime. If it
+reports candidates for a different plan, prepare artifacts for the new configuration
+even if the secret values have not changed. The error includes a `--deployment`
+command for the exact activation plans. Use the executable shown there when your
+installed CLI is older and lacks `prepare`. Embedded home accounts must exist so
+the preflight can read each private cache as its owner. On a first installation,
+create those accounts before preparing and activating their home secrets.
+
 For individual plans or manual approval workflows:
 
 1. Treat the cache as disposable ciphertext-only build output. Verify the
