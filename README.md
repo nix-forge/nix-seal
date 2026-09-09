@@ -5,6 +5,13 @@ nix-darwin, and Home Manager. It stores standard age ciphertext in Git, builds a
 strict deterministic public policy plan, and activates plaintext only in
 restricted runtime directories.
 
+Start with the [Nix authoring guide](docs/nix-authoring.md) for native NixOS,
+nix-darwin, and Home Manager setup, short secret and template declarations,
+and first-time creation. The [storage guide](docs/storage-layout.md) explains
+portable defaults and colocated layouts. Name lists declare ordinary secrets and
+templates; named options handle exceptions. Templates accept public text or files;
+advanced mappings, ownership, phases, and service actions remain available.
+
 The scale benchmark and its reporting protocol are documented in
 [`docs/benchmarks.md`](docs/benchmarks.md). CI publishes raw, machine-readable
 benchmark output with runner metadata; timing numbers are never presented as
@@ -154,42 +161,34 @@ For ciphertext shared between hosts and homes, configure the same
 This example reads `modules/shared/secrets/api-token.age`. Sharing a source
 does not grant another target access: administrators, recipients, runtime
 ownership, and signed artifacts remain target-specific. An explicit
-`secrets.<name>.source` takes precedence over either directory. Legacy mode
-without an administrator still requires explicit source declarations.
+`secrets.<name>.source` takes precedence over either directory. Unscoped mode
+defaults to `secrets/<name>.age`.
 
 Directory settings reject absolute paths, traversal, empty components, and
 trailing slashes. Moving an existing ciphertext changes signed plan metadata
 even when its bytes are unchanged. Evaluate fresh plans and reprovision target
 artifacts before deploying the new paths; retain old cache entries for rollback.
 
-The following is deliberately all public metadata; the `.age` source remains
-ciphertext.
+With the public catalog above, a target needs its public key and declarations.
+This example uses a dedicated age identity instead of the default SSH host key:
 
 ```nix
 {
   nixSeal = {
-    enable = true;
-    administrator = "ianhollow";
     repositoryRoot = ../../.;
     identityFile = "/etc/nix-seal/target.agekey";
-    artifactCacheRoot = "/var/lib/nix-seal/cache/v1";
-    identities = {
-      target = { kind = "target"; public = "age1..."; };
-    };
-    secrets."service-token" = {
-      administrators = [ "administrator" ];
-      owner = "root";
-      group = "root";
-      mode = "0400";
-    };
+    publicKey = "age1...";
+    secrets = [ "service-token" ];
   };
 }
 ```
 
-When `nixSeal.administrator` is omitted, the legacy explicit-identity mode
-remains available for migration and unusual layouts. In that mode IDs and
-sources are used exactly as declared; scoped targets reject hard-coded IDs from
-another administrator.
+Declarations enable nix-seal, and a single administrator catalog selects itself.
+Multiple catalogs require `nixSeal.administrator`; explicit null selects the
+legacy unscoped identity mode. In that mode IDs are used exactly as declared;
+scoped targets reject hard-coded IDs from another administrator. The framework
+adapter supplies `repositoryRoot`, so its targets can omit that field too.
+Cache paths, ownership, and read-only permissions have platform defaults.
 
 Secret `selectors` can select exact targets or groups and filter by target kind,
 system, username, configuration, environment, and tags. Non-empty selector

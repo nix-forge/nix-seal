@@ -17,7 +17,7 @@ jobs:
     permissions:
       contents: read
       security-events: write # Upload code scanning results.
-    uses: nix-forge/ci/.github/workflows/codeql.yml@d84cb92725a2ab7eafcdc9d1f1fb7a06048dfa1a # v2.2.0
+    uses: nix-forge/ci/.github/workflows/codeql.yml@6ddb6f568f93b25a199c1d988c64ba2c2e9a3161 # v2.4.0
     with:
       languages: rust
   queue-completion:
@@ -31,4 +31,4 @@ jobs:
       actions: write # Dispatch trusted queue validation.
     steps:
       - name: Notify trusted queue reconciler
-        uses: nix-forge/ci/actions/queue-completion@d84cb92725a2ab7eafcdc9d1f1fb7a06048dfa1a # v2.2.0
+        uses: nix-forge/ci/actions/queue-completion@6ddb6f568f93b25a199c1d988c64ba2c2e9a3161 # v2.4.0

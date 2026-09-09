@@ -1,1 +1,6 @@
-{ config, ... }: { nixConfigFramework.extraSpecialArgs.nixSealCatalog = config.flake.nixSeal; }
+{ config, self, ... }: {
+  nixConfigFramework.extraSpecialArgs = {
+    nixSealCatalog = config.flake.nixSeal;
+    nixSealRepositoryRoot = self.outPath;
+  };
+}

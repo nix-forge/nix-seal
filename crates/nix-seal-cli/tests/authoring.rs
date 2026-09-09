@@ -252,7 +252,7 @@ fn bootstrap_complete_creates_once_without_exposing_secret_metadata()
         "--bootstrap-plan",
         path_text(&bootstrap_path)?,
         "--secret",
-        "db/password",
+        "password",
         "--authorizer-key",
         path_text(&authorizer_path)?,
         "--repository-root",

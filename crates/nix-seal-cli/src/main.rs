@@ -696,8 +696,15 @@ enum BootstrapCommand {
 struct BootstrapCompleteArgs {
     #[arg(long)]
     bootstrap_plan: PathBuf,
+    /// Canonical ID, or a local name that uniquely identifies a pending secret.
     #[arg(long)]
     secret: nix_seal_core::Id,
+    /// Read a hidden value from the controlling terminal instead of stdin.
+    #[arg(long)]
+    interactive: bool,
+    /// Preserve multiple lines; finish terminal input with Ctrl-D.
+    #[arg(long, requires = "interactive")]
+    multiline: bool,
     /// Explicit local authorizer signing key; it must not be in the repository or Nix store.
     #[arg(long)]
     authorizer_key: PathBuf,
@@ -4135,12 +4142,10 @@ fn read_tty_prompt(prompt: &nix_seal_core::GeneratorPrompt) -> Result<SecretBox<
             if read == 0 {
                 break;
             }
-            let end = buffer[..read]
-                .iter()
-                .position(|byte| *byte == b'\n')
-                .map_or(read, |position| position + 1);
+            let newline = buffer[..read].iter().position(|byte| *byte == b'\n');
+            let end = newline.map_or(read, |position| position + 1);
             value.extend_from_slice(&buffer[..end]);
-            let finished = value.len() > MAX_INTERACTIVE_PROMPT_BYTES || end != read;
+            let finished = value.len() > MAX_INTERACTIVE_PROMPT_BYTES || newline.is_some();
             buffer.zeroize();
             if finished {
                 break;
@@ -5278,14 +5283,17 @@ fn delegated_authorizer_keys(
     Ok(keys)
 }
 
+const MAX_BOOTSTRAP_PLAINTEXT_BYTES: u64 = 64 * 1024;
+
 fn read_bootstrap_plaintext() -> Result<Zeroizing<Vec<u8>>> {
-    const MAX_BOOTSTRAP_PLAINTEXT_BYTES: u64 = 64 * 1024;
     let mut input = Zeroizing::new(Vec::new());
     std::io::stdin()
         .take(MAX_BOOTSTRAP_PLAINTEXT_BYTES + 1)
         .read_to_end(&mut input)?;
     if input.is_empty() || input.len() as u64 > MAX_BOOTSTRAP_PLAINTEXT_BYTES {
-        bail!("bootstrap plaintext is empty or exceeds the 65536 byte limit");
+        bail!(
+            "bootstrap plaintext is empty or exceeds the {MAX_BOOTSTRAP_PLAINTEXT_BYTES} byte limit"
+        );
     }
     Ok(input)
 }
@@ -5338,13 +5346,35 @@ fn write_bootstrap_secret(
     Ok(())
 }
 
+fn resolve_pending_secret(
+    plan: &nix_seal_core::PlanV2,
+    requested: &nix_seal_core::Id,
+) -> Result<nix_seal_core::Id> {
+    if plan.secrets.contains_key(requested) {
+        return Ok(requested.clone());
+    }
+    let suffix = format!("/{requested}");
+    let mut matches = plan
+        .secrets
+        .keys()
+        .filter(|id| id.as_str().ends_with(&suffix));
+    let selected = matches
+        .next()
+        .context("secret is absent from bootstrap plan")?;
+    if matches.next().is_some() {
+        bail!("local secret name is ambiguous; use its complete canonical ID");
+    }
+    Ok(selected.clone())
+}
+
 fn run_bootstrap_complete(arguments: &BootstrapCompleteArgs, json: bool) -> Result<()> {
     let plan = read_bootstrap_create_plan(&arguments.bootstrap_plan)?;
+    let secret = resolve_pending_secret(&plan, &arguments.secret)?;
     let authorizer = ensure_bootstrap_authorizer(&plan, &arguments.authorizer_key)?;
     let mut challenge = b"nix-seal bootstrap completion possession v1\0".to_vec();
     challenge.extend_from_slice(nix_seal_policy::plan_hash(&plan)?.as_bytes());
     challenge.push(0);
-    challenge.extend_from_slice(arguments.secret.as_str().as_bytes());
+    challenge.extend_from_slice(secret.as_str().as_bytes());
     let mut nonce = [0_u8; 32];
     getrandom::fill(&mut nonce).context("could not obtain possession-proof randomness")?;
     challenge.push(0);
@@ -5352,10 +5382,27 @@ fn run_bootstrap_complete(arguments: &BootstrapCompleteArgs, json: bool) -> Resu
     authorizer
         .prove_possession(&challenge)
         .context("bootstrap authorizer private-key possession was not proved")?;
-    let input = read_bootstrap_plaintext()?;
+    let input = if arguments.interactive {
+        let response = read_tty_prompt(&nix_seal_core::GeneratorPrompt {
+            id: secret.clone(),
+            message: format!("Value for {}", arguments.secret),
+            mode: nix_seal_core::GeneratorPromptMode::Hidden,
+            multiline: arguments.multiline,
+            persistent: false,
+        })?;
+        let value = response.expose_secret();
+        if value.is_empty() || value.len() as u64 > MAX_BOOTSTRAP_PLAINTEXT_BYTES {
+            bail!(
+                "bootstrap plaintext must contain between 1 and {MAX_BOOTSTRAP_PLAINTEXT_BYTES} bytes"
+            );
+        }
+        Zeroizing::new(value.clone())
+    } else {
+        read_bootstrap_plaintext()?
+    };
     write_bootstrap_secret(
         &plan,
-        &arguments.secret,
+        &secret,
         &arguments.repository_root,
         input.as_slice(),
         json,

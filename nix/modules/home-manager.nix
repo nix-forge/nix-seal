@@ -9,11 +9,10 @@ self:
 let
   cfg = config.nixSeal;
   inherit (import ./support.nix { inherit lib pkgs; }) groupCredentials escapeSystemdExecArgs;
+  integratedLinux =
+    pkgs.stdenv.hostPlatform.isLinux && osConfig != null && (osConfig.nixSeal.enable or false);
   integratedLinuxVolatile =
-    pkgs.stdenv.hostPlatform.isLinux
-    && osConfig != null
-    && (osConfig.nixSeal.enable or false)
-    && (osConfig.nixSeal.linux.volatileRuntime.enable or false);
+    integratedLinux && (osConfig.nixSeal.linux.volatileRuntime.enable or false);
   integratedDarwinVolatile =
     pkgs.stdenv.hostPlatform.isDarwin
     && osConfig != null
@@ -48,6 +47,10 @@ let
           lib.escapeShellArg "${config.home.homeDirectory}/Library/Caches/nix-seal${runtimeSuffix}";
     in
     ''
+      ${lib.optionalString integratedLinux ''
+        # A boot-time Home Manager unit has no login-session environment.
+        export XDG_RUNTIME_DIR="''${XDG_RUNTIME_DIR:-/run/user/$(${pkgs.coreutils}/bin/id -u)}"
+      ''}
       ${lib.optionalString (pkgs.stdenv.hostPlatform.isLinux && !integratedLinuxVolatile) ''
         if [ -z "''${XDG_RUNTIME_DIR:-}" ]; then
           echo "nix-seal: XDG_RUNTIME_DIR is required for Linux Home Manager activation" >&2
@@ -130,7 +133,7 @@ in
   ];
   config = lib.mkIf cfg.enable {
     # Keep the public, non-decrypting authoring commands available to the
-    # profile owner. Private identities remain explicit out-of-store paths.
+    # profile owner. Private identities remain out-of-store runtime paths.
     home.packages = [ cfg.package ];
     assertions = [
       {

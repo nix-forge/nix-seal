@@ -14,6 +14,28 @@ let
       builtins.attrNames (config."home-manager".users or { })
     else
       [ ];
+  serviceManagerUsers = lib.filter (
+    user:
+    let
+      home = config.home-manager.users.${user};
+      seal = home.nixSeal or { };
+      outputs = builtins.attrValues (seal.secrets or { }) ++ builtins.attrValues (seal.templates or { });
+    in
+    (seal.enable or false)
+    && lib.any (
+      output:
+      (output.restartUnits or [ ]) != [ ]
+      || (output.reloadUnits or [ ]) != [ ]
+      || (output.serviceCredentials or [ ]) != [ ]
+    ) outputs
+  ) embeddedHomeManagerUsers;
+  startUserManager =
+    user:
+    pkgs.writeShellScript "nix-seal-start-user-manager" ''
+      set -eu
+      uid="$(${pkgs.coreutils}/bin/id -u -- ${lib.escapeShellArg user})"
+      exec ${pkgs.systemd}/bin/systemctl start "user@$uid.service"
+    '';
   runtimeArguments =
     command: users:
     [
@@ -230,6 +252,16 @@ in
     # User managers can start for lingering users before normal login sessions.
     # Both they and embedded Home Manager need the private runtime roots first.
     systemd.services = lib.mkMerge [
+      (lib.listToAttrs (
+        map (
+          user:
+          lib.nameValuePair "home-manager-${user}" {
+            # Home Manager runs as the profile owner. Only this root-owned setup
+            # command starts the user manager; secret activation stays unprivileged.
+            serviceConfig.ExecStartPre = lib.mkBefore [ "+${startUserManager user}" ];
+          }
+        ) serviceManagerUsers
+      ))
       (lib.mkIf cfg.linux.volatileRuntime.enable (
         {
           "user@" = lib.mkIf (embeddedHomeManagerUsers != [ ]) {

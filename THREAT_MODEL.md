@@ -79,6 +79,38 @@ The signed protocol limits delegated plaintext to 64 KiB. Direct bootstrap
 completion proves current private-key possession with a fresh random challenge
 before reading plaintext, including when the authorizer uses an SSH agent.
 
+Native Nix template shorthand resolves only explicitly declared secrets. It
+validates references and phase constraints before exporting a plan. Pending
+fields and their templates cannot enter activation until the ciphertext exists;
+the separate creation plan contains no template outputs. Public template text
+and names remain public metadata. UTF-8 substitution does not escape the
+consumer's configuration language.
+
+Public template inputs use a separate `{{public:name}}` namespace and are
+resolved by Nix before plan compilation. They enter the public store. Evaluation
+rejects missing or unused bindings, expansion beyond 2 MiB, nested reserved
+markers, and replacement-boundary changes to secret markers. Public substitution
+does not grant access to additional fields or change secret phase policy.
+
+Nix name lists normalize into the same validated declarations. A single public
+administrator catalog may select itself; multiple catalogs require an explicit
+choice. Target public keys remain explicit and conflicting identity declarations
+fail evaluation. Default SSH identity paths are runtime paths only: evaluation
+does not read private keys, generate identities, or discover recipients. Template
+phase inference follows existing field phases and rejects mixed-phase inputs.
+
+Interactive bootstrap creation resolves a local name to exactly one canonical
+ID before proving authorizer possession or requesting input. The challenge
+binds that canonical ID. Hidden terminal input restores echo and retains the
+same size and create-only limits as stdin. Ambiguous names never select a
+recipient or destination implicitly.
+
+On NixOS, a root-owned pre-start helper may start the configured embedded
+profile's user manager before service-related activation. Its username is
+shell-escaped public configuration, its executables are store paths, and its
+UID comes from the local account database. Secret activation remains under the
+profile owner's UID; this helper cannot read or modify plaintext or policy.
+
 Security tests cover traversal, symlink/hardlink/TOCTOU races, malformed crypto
 and signatures, replay and target substitution, disk exhaustion, crashes,
 concurrency, secret canaries, and denial-of-service bounds. Post-switch service

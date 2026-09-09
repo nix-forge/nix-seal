@@ -93,18 +93,18 @@ in
       {
         assertion =
           !(cfg.activationSpecs ? users)
-          || lib.all (secret: secret.owner == "root" && secret.group == "root") (
+          || lib.all (secret: secret.owner == "root" && secret.group == "wheel") (
             builtins.attrValues (lib.filterAttrs (_: secret: secret.phase == "users") cfg.secrets)
           );
-        message = "nixSeal users-phase secrets must be owned by root:root until macOS accounts exist";
+        message = "nixSeal users-phase secrets must be owned by root:wheel until macOS accounts exist";
       }
       {
         assertion =
           !(cfg.activationSpecs ? users)
-          || lib.all (template: template.owner == "root" && template.group == "root") (
+          || lib.all (template: template.owner == "root" && template.group == "wheel") (
             builtins.attrValues (lib.filterAttrs (_: template: template.phase == "users") cfg.templates)
           );
-        message = "nixSeal users-phase templates must be owned by root:root until macOS accounts exist";
+        message = "nixSeal users-phase templates must be owned by root:wheel until macOS accounts exist";
       }
     ];
     # nix-darwin activation snippets have a fixed phase order and do not

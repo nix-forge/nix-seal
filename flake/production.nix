@@ -123,6 +123,12 @@ in
       checks = {
         nix-seal = nixSeal;
         inherit documentation;
+        bootstrap-terminal =
+          pkgs.runCommand "nix-seal-bootstrap-terminal" { nativeBuildInputs = [ pkgs.python3 ]; }
+            ''
+              python3 ${../nix/tests/scripts/bootstrap-tty.py} ${nixSeal}/bin/nix-seal
+              touch "$out"
+            '';
       }
       // import ../nix/tests/bash-writers.nix { inherit pkgs; }
       // import ../nix/tests/module-evaluation.nix {
@@ -143,6 +149,8 @@ in
 
   flake = {
     schemas = inputs.flake-schemas.exportedSchemas // {
+      ciChecks = inputs.flake-schemas.exportedSchemas.checks;
+      lintChecks = inputs.flake-schemas.exportedSchemas.checks;
       flakeModules = moduleSchema;
       homeManagerModules = moduleSchema;
       lib = exportSchema "library function or schema constant" (
