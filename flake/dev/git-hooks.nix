@@ -4,17 +4,18 @@
   perSystem =
     { config, pkgs, ... }:
     let
-      pythonCompile = pkgs.replaceVarsWith {
-        name = "nix-seal-python-compile";
-        src = ./scripts/python-compile.sh;
-        isExecutable = true;
-        replacements = {
-          bash = lib.getExe pkgs.bash;
-          mktemp = "${pkgs.coreutils}/bin/mktemp";
-          python = lib.getExe pkgs.python3;
-          rm = lib.getExe' pkgs.coreutils "rm";
-        };
-      };
+      pythonCompile =
+        (import ../../nix/lib/writers.nix { inherit (pkgs) lib; }).writeBashTemplate { inherit pkgs; }
+          {
+            name = "nix-seal-python-compile";
+            src = ./scripts/python-compile.sh;
+            replacements = {
+              bash = lib.getExe pkgs.bash;
+              mktemp = "${pkgs.coreutils}/bin/mktemp";
+              python = lib.getExe pkgs.python3;
+              rm = lib.getExe' pkgs.coreutils "rm";
+            };
+          };
     in
     {
       pre-commit = {

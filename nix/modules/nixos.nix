@@ -3,10 +3,12 @@ self:
   config,
   lib,
   pkgs,
+  utils,
   ...
 }:
 let
   cfg = config.nixSeal;
+  inherit (import ./support.nix { inherit lib pkgs; }) groupCredentials;
   embeddedHomeManagerUsers =
     if builtins.hasAttr "home-manager" config then
       builtins.attrNames (config."home-manager".users or { })
@@ -30,20 +32,23 @@ let
     # Mounting an already mounted tmpfs hides every existing secret generation.
     # The runtime validator below still rejects an unsafe existing mount.
     if ! ${pkgs.util-linux}/bin/mountpoint --quiet -- ${lib.escapeShellArg cfg.linux.volatileRuntime.root}; then
+      # Stage-2 activation can precede systemd's mount-directory creation.
+      ${pkgs.coreutils}/bin/mkdir -p -- ${lib.escapeShellArg cfg.linux.volatileRuntime.root}
       ${pkgs.util-linux}/bin/mount -- ${lib.escapeShellArg cfg.linux.volatileRuntime.root}
     fi
   '';
-  runtimeActivation = pkgs.replaceVarsWith {
-    name = "nix-seal-runtime-activation";
-    src = ./scripts/runtime-activation.sh;
-    isExecutable = true;
-    replacements = {
-      bash = lib.getExe pkgs.bash;
-      inherit mountRuntime;
-      # This snippet can run before NixOS creates the target user accounts.
-      prepare = lib.escapeShellArgs (runtimeArguments "prepare" [ ]);
-    };
-  };
+  runtimeActivation =
+    (import ../lib/writers.nix { inherit (pkgs) lib; }).writeBashTemplate { inherit pkgs; }
+      {
+        name = "nix-seal-runtime-activation";
+        src = ./scripts/runtime-activation.sh;
+        replacements = {
+          bash = lib.getExe pkgs.bash;
+          inherit mountRuntime;
+          # This snippet can run before NixOS creates the target user accounts.
+          prepare = lib.escapeShellArgs (runtimeArguments "prepare" [ ]);
+        };
+      };
   runtimeDeps = lib.optional cfg.linux.volatileRuntime.enable "nixSealRuntime";
   bootPhases = [
     "users"
@@ -52,16 +57,18 @@ let
   ];
   bootActivationCommands = lib.concatMap (
     phase:
-    lib.optional (builtins.hasAttr phase cfg.activationSpecs) "${lib.getExe cfg.package} activate --spec ${cfg.activationSpecs.${phase}} --identity ${lib.escapeShellArg cfg.identityFile}"
+    lib.optional (builtins.hasAttr phase cfg.activationSpecs) (
+      utils.escapeSystemdExecArgs [
+        (lib.getExe cfg.package)
+        "activate"
+        "--spec"
+        cfg.activationSpecs.${phase}
+        "--identity"
+        cfg.identityFile
+      ]
+    )
   ) bootPhases;
   credentialId = value: builtins.head (lib.splitString ":" (toString value));
-  groupCredentials = lib.foldl' (
-    grouped: binding:
-    let
-      unit = lib.removeSuffix ".service" binding.unit;
-    in
-    grouped // { ${unit} = (grouped.${unit} or [ ]) ++ [ "${binding.name}:${binding.path}" ]; }
-  ) { };
   activate = spec: ''
     ${lib.getExe cfg.package} activate \
       --spec ${spec} \
@@ -247,7 +254,7 @@ in
             Type = "oneshot";
             RemainAfterExit = true;
             UMask = "0077";
-            ExecStart = prepare;
+            ExecStart = utils.escapeSystemdExecArgs (runtimeArguments "prepare" embeddedHomeManagerUsers);
           };
         };
         nix-seal-activate = {

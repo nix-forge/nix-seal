@@ -131,6 +131,37 @@ source `secrets/ianhollow/users/ianmh/nix-access-tokens.age`; callers still use
 supplies target names; standalone or unusual configurations can override
 `nixSeal.targetId` and `nixSeal.secretScope` explicitly.
 
+Storage is configurable independently of those IDs. Scoped targets can set
+`nixSeal.secretDirectory` to a repository-relative folder such as
+`hosts/shared/secrets` or `homes/shared/secrets`. The default remains
+`secrets/<administrator>/<secretScope>`, so existing configurations keep their
+paths. Local secret names, including any subdirectories, are appended with
+`.age`.
+
+For ciphertext shared between hosts and homes, configure the same
+`nixSeal.sharedSecretDirectory` on each participating target and set
+`nixSeal.secrets.<name>.shared = true`. That directory defaults to
+`secrets/<administrator>/shared`. For example:
+
+```nix
+{
+  nixSeal.secretDirectory = "homes/shared/secrets";
+  nixSeal.sharedSecretDirectory = "modules/shared/secrets";
+  nixSeal.secrets.api-token.shared = true;
+}
+```
+
+This example reads `modules/shared/secrets/api-token.age`. Sharing a source
+does not grant another target access: administrators, recipients, runtime
+ownership, and signed artifacts remain target-specific. An explicit
+`secrets.<name>.source` takes precedence over either directory. Legacy mode
+without an administrator still requires explicit source declarations.
+
+Directory settings reject absolute paths, traversal, empty components, and
+trailing slashes. Moving an existing ciphertext changes signed plan metadata
+even when its bytes are unchanged. Evaluate fresh plans and reprovision target
+artifacts before deploying the new paths; retain old cache entries for rollback.
+
 The following is deliberately all public metadata; the `.age` source remains
 ciphertext.
 
@@ -509,6 +540,11 @@ outside `/nix/store`, owned by the invoking user, and in a directory that is not
 group- or world-writable.
 
 ## Systemd service credentials
+
+Generated activation services pass configured paths as literal systemd
+arguments, including spaces, quotes, `$`, and `%`. Standalone Home Manager's
+internally generated `%t` runtime root still expands to the user runtime
+directory. See [the argument-encoding decision](docs/adr/0016-systemd-literal-arguments.md).
 
 NixOS system services and Linux Home Manager user services can receive an
 activated secret through systemd's per-service credential directory:
@@ -914,3 +950,16 @@ safe authorization for code introduced by a later checkout.
 
 Licensed under either Apache-2.0 or MIT, at your option. Contributions require a
 Developer Certificate of Origin sign-off.
+
+## Generated Bash scripts
+
+Activation, credential-test, and Python-check templates use the checked writer in
+`nix/lib/writers.nix`. It strictly substitutes values, normalizes the Bash
+interpreter line, and runs the Nixpkgs Bash writer with parser and ShellCheck
+validation of the complete output. Source shell options and dry-activation
+behavior remain unchanged. The helper is local so this flake remains standalone.
+
+The `bash-template-writer`, `bash-template-invalid-syntax`,
+`bash-template-invalid-lint`, and `bash-runtime-activation` flake checks cover
+arguments, file layouts, non-executing validation, dry activation, and failure
+propagation. The existing runtime VM checks cover the actual module integration.

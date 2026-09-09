@@ -480,6 +480,31 @@ in
       default = null;
       description = "Administrator-relative secret namespace; derived from the target when available.";
     };
+    secretDirectory = mkOption {
+      type = idType;
+      default =
+        if cfg.administrator != null && cfg.secretScope != null then
+          "secrets/${cfg.administrator}/${cfg.secretScope}"
+        else
+          "secrets";
+      defaultText = "secrets/<administrator>/<secretScope>";
+      description = ''
+        Repository-relative directory for automatically named canonical ciphertexts.
+        Changing storage does not change secret IDs, recipients, or runtime paths.
+        Each secret's explicit source overrides this directory.
+      '';
+    };
+    sharedSecretDirectory = mkOption {
+      type = idType;
+      default =
+        if cfg.administrator != null then "secrets/${cfg.administrator}/shared" else "secrets/shared";
+      defaultText = "secrets/<administrator>/shared";
+      description = ''
+        Repository-relative directory used by secrets with shared = true.
+        Configure the same directory on participating hosts and homes to reuse
+        ciphertext. Each target retains its own policy and signed artifacts.
+      '';
+    };
     identityFile = mkOption {
       type = types.nullOr types.str;
       default = null;
@@ -610,14 +635,21 @@ in
                   refuses to replace a mismatched existing filesystem entry.
                 '';
               };
+              shared = mkOption {
+                type = types.bool;
+                default = false;
+                description = "Derive the default source from sharedSecretDirectory instead of secretDirectory. This does not grant other targets access.";
+              };
               source = mkOption {
                 type = types.nullOr types.str;
                 default =
                   if cfg.administrator != null && cfg.secretScope != null then
-                    "secrets/${canonicalSecretId name}.age"
+                    "${
+                      if cfg.secrets.${name}.shared then cfg.sharedSecretDirectory else cfg.secretDirectory
+                    }/${name}.age"
                   else
                     null;
-                description = "Repository-relative canonical .age ciphertext source; scoped targets derive this from the canonical ID.";
+                description = "Repository-relative canonical .age ciphertext source; scoped targets derive this from the configured storage directory and local name. Explicit sources override both directories.";
               };
               delivery = mkOption {
                 type = types.enum [

@@ -9,6 +9,19 @@ let
   # the Nix evaluation graph, store, test derivation, and host never contain a
   # plaintext fixture or a private key.
   nixSeal = self.packages.${system}.nix-seal;
+  literalArgument = "/run/keys/test identity%literal$dollar'quote";
+  inherit
+    (import ../modules/support.nix {
+      inherit pkgs;
+      inherit (pkgs) lib;
+    })
+    escapeSystemdExecArgs
+    ;
+  argumentProbe = pkgs.writeShellScript "nix-seal-argument-probe" ''
+    set -eu
+    test "$1" = ${pkgs.lib.escapeShellArg literalArgument}
+    test "$2" = /run
+  '';
 in
 pkgs.testers.nixosTest {
   name = "nix-seal-runtime-activation";
@@ -21,21 +34,33 @@ pkgs.testers.nixosTest {
       pkgs.gnugrep
       pkgs.jq
     ];
+    systemd.services.nix-seal-argument-probe = {
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart =
+          escapeSystemdExecArgs [
+            argumentProbe
+            literalArgument
+          ]
+          + " \"%t\"";
+      };
+    };
     systemd.services.nix-seal-test = {
       description = "nix-seal VM credential consumer";
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
         LoadCredential = "database-password:/run/nix-seal/current/app/token";
-        ExecStart = pkgs.replaceVarsWith {
-          name = "nix-seal-test-service";
-          src = ./scripts/nix-seal-test-service.sh;
-          isExecutable = true;
-          replacements = {
-            bash = "${pkgs.bash}/bin/bash";
-            cat = "${pkgs.coreutils}/bin/cat";
-          };
-        };
+        ExecStart =
+          (import ../lib/writers.nix { inherit (pkgs) lib; }).writeBashTemplate { inherit pkgs; }
+            {
+              name = "nix-seal-test-service";
+              src = ./scripts/nix-seal-test-service.sh;
+              replacements = {
+                bash = "${pkgs.bash}/bin/bash";
+                cat = "${pkgs.coreutils}/bin/cat";
+              };
+            };
       };
     };
     virtualisation.memorySize = 1024;
