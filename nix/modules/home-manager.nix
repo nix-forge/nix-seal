@@ -148,6 +148,20 @@ in
       }
     ];
     home.activation = lib.mkMerge [
+      (lib.mkIf (cfg.activationSpecs != { }) {
+        nixSealReadiness = lib.hm.dag.entryBefore [ "writeBoundary" ] (
+          lib.escapeShellArgs (
+            [
+              (lib.getExe cfg.package)
+              "readiness"
+            ]
+            ++ lib.concatMap (spec: [
+              "--spec"
+              (toString spec)
+            ]) (builtins.attrValues cfg.activationSpecs)
+          )
+        );
+      })
       (lib.mkIf (cfg.activationSpecs ? users) {
         nixSealUsers = lib.hm.dag.entryAfter [ "writeBoundary" ] (
           activate "users" cfg.activationSpecs.users

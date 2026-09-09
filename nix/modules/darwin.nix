@@ -81,73 +81,82 @@ in
       description = "Bounded total capacity of the Darwin nix-seal tmpfs.";
     };
   };
-  config = lib.mkIf cfg.enable {
-    nixSeal.runtimeStorage = lib.mkDefault (
-      if cfg.darwin.volatileRuntime.enable then "volatile-tmpfs" else "persistent"
-    );
-    assertions = [
-      {
-        assertion = !(cfg.activationSpecs ? partitioning);
-        message = "nixSeal partitioning-phase secrets require installer provisioning and cannot run in nix-darwin activation";
-      }
-      {
-        assertion =
-          !(cfg.activationSpecs ? users)
-          || lib.all (secret: secret.owner == "root" && secret.group == "wheel") (
-            builtins.attrValues (lib.filterAttrs (_: secret: secret.phase == "users") cfg.secrets)
-          );
-        message = "nixSeal users-phase secrets must be owned by root:wheel until macOS accounts exist";
-      }
-      {
-        assertion =
-          !(cfg.activationSpecs ? users)
-          || lib.all (template: template.owner == "root" && template.group == "wheel") (
-            builtins.attrValues (lib.filterAttrs (_: template: template.phase == "users") cfg.templates)
-          );
-        message = "nixSeal users-phase templates must be owned by root:wheel until macOS accounts exist";
-      }
-    ];
-    # nix-darwin activation snippets have a fixed phase order and do not
-    # support NixOS-style `deps`. Prepare the mount before any activation,
-    # materialize normal system state in the main activation phase, and run
-    # service work after Home Manager has installed its user-level state.
-    system.activationScripts = {
-      preActivation.text = lib.mkAfter (lib.optionalString cfg.darwin.volatileRuntime.enable prepare);
-      extraActivation.text = lib.mkAfter (
-        lib.concatStringsSep "\n" (
-          lib.optional (cfg.activationSpecs ? users) (activate cfg.activationSpecs.users)
-          ++ lib.optional (cfg.activationSpecs ? activation) (activate cfg.activationSpecs.activation)
-        )
+  config = lib.mkMerge [
+    (lib.mkIf cfg.enable {
+      nixSeal.runtimeStorage = lib.mkDefault (
+        if cfg.darwin.volatileRuntime.enable then "volatile-tmpfs" else "persistent"
       );
-      postActivation.text = lib.mkAfter (
-        lib.optionalString (cfg.activationSpecs ? services) (activate cfg.activationSpecs.services)
-      );
-    };
-    launchd.daemons =
-      lib.optionalAttrs cfg.darwin.volatileRuntime.enable {
-        nix-seal-runtime.serviceConfig = {
-          Label = "io.nix-seal.runtime";
-          ProgramArguments = prepareArguments;
-          RunAtLoad = true;
-          ProcessType = "Background";
-        };
-      }
-      // lib.listToAttrs (
+      assertions = [
+        {
+          assertion = !(cfg.activationSpecs ? partitioning);
+          message = "nixSeal partitioning-phase secrets require installer provisioning and cannot run in nix-darwin activation";
+        }
+        {
+          assertion =
+            !(cfg.activationSpecs ? users)
+            || lib.all (secret: secret.owner == "root" && secret.group == "wheel") (
+              builtins.attrValues (lib.filterAttrs (_: secret: secret.phase == "users") cfg.secrets)
+            );
+          message = "nixSeal users-phase secrets must be owned by root:wheel until macOS accounts exist";
+        }
+        {
+          assertion =
+            !(cfg.activationSpecs ? users)
+            || lib.all (template: template.owner == "root" && template.group == "wheel") (
+              builtins.attrValues (lib.filterAttrs (_: template: template.phase == "users") cfg.templates)
+            );
+          message = "nixSeal users-phase templates must be owned by root:wheel until macOS accounts exist";
+        }
+      ];
+      # nix-darwin activation snippets have a fixed phase order and do not
+      # support NixOS-style `deps`. Prepare the mount before any activation,
+      # materialize normal system state in the main activation phase, and run
+      # service work after Home Manager has installed its user-level state.
+      system.activationScripts = {
+        preActivation.text = lib.mkAfter (lib.optionalString cfg.darwin.volatileRuntime.enable prepare);
+        extraActivation.text = lib.mkAfter (
+          lib.concatStringsSep "\n" (
+            lib.optional (cfg.activationSpecs ? users) (activate cfg.activationSpecs.users)
+            ++ lib.optional (cfg.activationSpecs ? activation) (activate cfg.activationSpecs.activation)
+          )
+        );
+        postActivation.text = lib.mkAfter (
+          lib.optionalString (cfg.activationSpecs ? services) (activate cfg.activationSpecs.services)
+        );
+      };
+      launchd.daemons =
+        lib.optionalAttrs cfg.darwin.volatileRuntime.enable {
+          nix-seal-runtime.serviceConfig = {
+            Label = "io.nix-seal.runtime";
+            ProgramArguments = prepareArguments;
+            RunAtLoad = true;
+            ProcessType = "Background";
+          };
+        }
+        // lib.listToAttrs (
+          lib.concatMap (
+            phase:
+            lib.optional (builtins.hasAttr phase cfg.activationSpecs) {
+              name = "nix-seal-${phase}";
+              value.serviceConfig = {
+                Label = "io.nix-seal.${phase}";
+                ProgramArguments = activateArguments cfg.activationSpecs.${phase};
+                RunAtLoad = true;
+                ProcessType = "Background";
+              };
+            }
+          ) bootPhases
+        );
+      warnings =
+        lib.optional (!cfg.darwin.volatileRuntime.enable)
+          "macOS nix-seal plaintext runtime is persistent; enable nixSeal.darwin.volatileRuntime for tmpfs storage";
+    })
+    {
+      nixSeal.deploymentTargets = lib.mkAfter (
         lib.concatMap (
-          phase:
-          lib.optional (builtins.hasAttr phase cfg.activationSpecs) {
-            name = "nix-seal-${phase}";
-            value.serviceConfig = {
-              Label = "io.nix-seal.${phase}";
-              ProgramArguments = activateArguments cfg.activationSpecs.${phase};
-              RunAtLoad = true;
-              ProcessType = "Background";
-            };
-          }
-        ) bootPhases
+          user: config.home-manager.users.${user}.nixSeal.deploymentTargets or [ ]
+        ) embeddedHomeManagerUsers
       );
-    warnings =
-      lib.optional (!cfg.darwin.volatileRuntime.enable)
-        "macOS nix-seal plaintext runtime is persistent; enable nixSeal.darwin.volatileRuntime for tmpfs storage";
-  };
+    }
+  ];
 }

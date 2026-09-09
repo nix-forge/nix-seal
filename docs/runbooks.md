@@ -142,6 +142,17 @@ does not change the credential used by the service.
 
 ## Cache loss, corruption, or binary-cache substitution
 
+For module-managed configurations, start with `nix-seal prepare --flake
+.#nixosConfigurations.workstation --identity /private/admin.agekey --signing-key
+/private/release.key`. Add `--administrator-host admin.example` when those paths
+are on an administrator machine. Review the dry run and repeat with `--execute`.
+The command discovers system and home targets, installs signed ciphertext as each
+cache owner, and verifies readiness. Retry the normal switch afterward. For a
+failed switch into an already built NixOS system, use `--deployment` with that
+system path to prepare its exact plans. Existing cache generations are retained.
+
+For individual plans or manual approval workflows:
+
 1. Treat the cache as disposable ciphertext-only build output. Verify the
    canonical plan and source ciphertext from Git, not from the cache.
 2. Run `nix-seal doctor --plan plan.v2.json --repository-root .` and inspect any
