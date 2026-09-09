@@ -157,6 +157,48 @@ in
           user: config.home-manager.users.${user}.nixSeal.deploymentTargets or [ ]
         ) embeddedHomeManagerUsers
       );
+      # Check every cache before preparing our runtime or entering the ordinary
+      # nix-darwin activation phases, including hosts with only home secrets.
+      system.activationScripts.preActivation.text = lib.mkIf (cfg.deploymentTargets != [ ]) (
+        lib.mkBefore (
+          let
+            check =
+              destination:
+              let
+                command = lib.escapeShellArgs (
+                  lib.optionals (destination.user != null) [
+                    "/usr/bin/sudo"
+                    "-H"
+                    "-u"
+                    destination.user
+                    "--"
+                  ]
+                  ++ [
+                    (lib.getExe cfg.package)
+                    "readiness"
+                  ]
+                  ++ lib.concatMap (spec: [
+                    "--spec"
+                    (toString spec)
+                  ]) destination.specs
+                );
+              in
+              lib.optionalString (destination.specs != [ ]) ''
+                if ! ${command}; then readiness_failed=1; fi
+              '';
+          in
+          ''
+            readiness_failed=0
+            ${lib.concatMapStringsSep "\n" check cfg.deploymentTargets}
+            if [ "$readiness_failed" -ne 0 ]; then
+              echo "nix-seal: prepare this configuration before retrying activation; nix-seal runtime preparation has not run." >&2
+              echo "nix-seal: use '${lib.getExe cfg.package} prepare --deployment ${cfg.deploymentFile} --identity /path/to/admin.agekey --signing-key /path/to/release.key'." >&2
+              echo "nix-seal: replace the key paths, review the dry run, then repeat with --execute. Add --administrator-host when the keys are remote." >&2
+              exit 1
+            fi
+          ''
+        )
+      );
     }
   ];
 }
