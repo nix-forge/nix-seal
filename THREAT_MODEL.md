@@ -14,6 +14,19 @@ binary caches are public. A target trusts only its configured plan root,
 approval keys, and target identity. Repository authorization remains part of the
 root of trust even when artifacts are signed.
 
+Preparation over SSH keeps decryption and signing keys on the explicitly selected
+administrator host. It transfers bounded canonical ciphertext and public plans,
+then independently checks the returned signed artifacts against the initiating
+machine's plans before importing any destination cache. Request paths must be
+relative, traversal-free, and exactly cover the selected canonical sources.
+Transfer and installation do not authorize activation or change signature
+bindings. Cache imports run as the configured owner; elevation is limited to
+ciphertext installation and public readiness checks. An interrupted import can
+leave a subset of validated artifacts, so the complete readiness check must pass
+before switching. SSH host configuration and the chosen remote executable are
+trusted operator inputs. Plaintext and private identities are never serialized
+into the preparation exchange.
+
 ## Adversaries
 
 - Malicious repository contributors and substituted cache/transport objects.

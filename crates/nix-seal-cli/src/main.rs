@@ -4,6 +4,8 @@
 mod darwin_runtime;
 mod linux_runtime;
 mod migration;
+mod preparation;
+mod readiness;
 
 // Migration unit tests remain in this crate while command extraction proceeds;
 // keep the transitional test-only import scoped to this crate root.
@@ -187,6 +189,14 @@ enum Command {
         #[arg(long)]
         runtime_root: Option<PathBuf>,
     },
+    /// Verify required artifacts before activation, without reading private keys.
+    Readiness(readiness::Args),
+    /// Prepare and install signed artifacts for a Nix configuration.
+    Prepare(preparation::Args),
+    #[command(name = "__prepare-worker", hide = true)]
+    PrepareWorker(preparation::WorkerArgs),
+    #[command(name = "__install-prepared", hide = true)]
+    InstallPrepared(preparation::InstallArgs),
     /// Identity operations.
     #[command(subcommand)]
     Key(KeyCommand),
@@ -1035,6 +1045,10 @@ fn run(cli: Cli) -> Result<()> {
             runtime_root.as_deref(),
             cli.json,
         )?,
+        Command::Readiness(arguments) => readiness::run(&arguments, cli.json)?,
+        Command::Prepare(arguments) => preparation::run(&arguments, cli.json)?,
+        Command::PrepareWorker(arguments) => preparation::worker(&arguments)?,
+        Command::InstallPrepared(arguments) => preparation::install(&arguments)?,
         Command::Key(command) => run_key(command, cli.json)?,
         Command::Identity(command) => run_identity(command, cli.json)?,
         Command::Group(command) => run_group(command, cli.json)?,
@@ -1317,7 +1331,7 @@ fn doctor_warnings(
     }
     if stale_artifacts > 0 {
         warnings.push(format!(
-            "{stale_artifacts} cache artifact(s) do not match the current authenticated plan and are garbage-collection candidates"
+            "{stale_artifacts} cache artifact(s) do not match this plan; retain artifacts needed by other targets or rollback generations"
         ));
     }
     if unavailable_sources > 0 {
@@ -1347,6 +1361,8 @@ fn run_doctor(
     let stale_artifacts = inventory
         .artifact_count
         .saturating_sub(authenticated_artifacts);
+    let readiness = readiness::plan_reports(&plan, cache.root())?;
+    let ready = readiness.iter().all(readiness::Report::is_ready);
     let filevault = darwin_runtime::filevault_state();
     let runtime = runtime_root.as_ref().map(|root| {
         if cfg!(target_os = "linux") {
@@ -1372,7 +1388,10 @@ fn run_doctor(
             "{}",
             serde_json::json!({
                 "schema":"nix-seal.doctor.v1",
-                "ok":true,
+                "ok":ready,
+                "planValid":true,
+                "ready":ready,
+                "readiness":readiness,
                 "planHash":plan_hash,
                 "secrets":plan.secrets.len(),
                 "targets":plan.targets.len(),
@@ -1403,6 +1422,17 @@ fn run_doctor(
             eprintln!("warning: {warning}");
         }
     }
+    if !ready {
+        for report in &readiness {
+            if !report.is_ready() {
+                eprintln!("{}", report.failure_message());
+            }
+        }
+        bail!(
+            "required artifacts are not ready; run nix-seal prepare on the administrator machine before activation"
+        );
+    }
+
     Ok(())
 }
 
@@ -4556,12 +4586,33 @@ fn discover_activation_artifacts(
     now: u64,
     allowed_clock_skew: u64,
 ) -> Result<BTreeMap<nix_seal_core::Id, DiscoveredActivationArtifact>> {
-    let cache = nix_seal_cache::Cache::open(cache_root.to_owned())?;
+    let inspection =
+        inspect_activation_artifacts(cache_root, policy, phase, now, allowed_clock_skew)?;
+    if !inspection.report.is_ready() {
+        bail!("{}", inspection.report.failure_message());
+    }
+    Ok(inspection.selected)
+}
+
+#[allow(clippy::too_many_lines)]
+fn inspect_activation_artifacts(
+    cache_root: &Path,
+    policy: &nix_seal_policy::TargetPolicyV1,
+    phase: nix_seal_core::ActivationPhase,
+    now: u64,
+    allowed_clock_skew: u64,
+) -> Result<readiness::Inspection> {
+    let records = if cache_root.try_exists()? {
+        nix_seal_cache::Cache::open(cache_root.to_owned())?.artifact_records()?
+    } else {
+        Vec::new()
+    };
+    let mut rejected: BTreeMap<nix_seal_core::Id, BTreeSet<String>> = BTreeMap::new();
     let target_policy_hash = nix_seal_policy::target_policy_hash(policy)?;
     let recipient_fingerprint = nix_seal_crypto::recipient_fingerprint(&policy.recipient)?;
     let mut selected: BTreeMap<nix_seal_core::Id, DiscoveredActivationArtifact> = BTreeMap::new();
 
-    for record in cache.artifact_records()? {
+    for record in records {
         let Ok(envelope) =
             serde_json::from_slice::<nix_seal_manifest::SignedEnvelopeV1>(&record.envelope)
         else {
@@ -4573,13 +4624,25 @@ fn discover_activation_artifacts(
         let Some(secret) = policy.secrets.get(&manifest.secret_id) else {
             continue;
         };
-        if secret.phase != phase
-            || manifest.plan_hash != policy.plan_hash
-            || manifest.target_policy_hash != target_policy_hash
-            || manifest.target_id != policy.target_id
-            || manifest.source_ciphertext_hash != secret.source_ciphertext_hash
-            || manifest.recipient_fingerprint != recipient_fingerprint
-        {
+        if secret.phase != phase || manifest.target_id != policy.target_id {
+            continue;
+        }
+        let reason = if manifest.plan_hash != policy.plan_hash {
+            Some("candidate refers to a different plan; prepare artifacts for this configuration")
+        } else if manifest.target_policy_hash != target_policy_hash {
+            Some("candidate refers to a different target policy")
+        } else if manifest.source_ciphertext_hash != secret.source_ciphertext_hash {
+            Some("candidate refers to different source ciphertext")
+        } else if manifest.recipient_fingerprint != recipient_fingerprint {
+            Some("candidate refers to a different recipient")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            rejected
+                .entry(manifest.secret_id.clone())
+                .or_default()
+                .insert(reason.to_owned());
             continue;
         }
         let Ok(address) = nix_seal_cache::ArtifactAddress::new(
@@ -4594,6 +4657,10 @@ fn discover_activation_artifacts(
             continue;
         };
         if address.key().ok().as_deref() != Some(record.key.as_str()) {
+            rejected
+                .entry(manifest.secret_id.clone())
+                .or_default()
+                .insert("candidate cache address does not match its binding".to_owned());
             continue;
         }
         let mut trusted = nix_seal_manifest::TrustedKeys::new();
@@ -4613,14 +4680,16 @@ fn discover_activation_artifacts(
             now,
             allowed_clock_skew,
         };
-        if nix_seal_manifest::verify(
+        if let Err(error) = nix_seal_manifest::verify(
             &envelope,
             &trusted,
             usize::from(secret.approval.threshold),
             &expected,
-        )
-        .is_err()
-        {
+        ) {
+            rejected
+                .entry(manifest.secret_id.clone())
+                .or_default()
+                .insert(format!("candidate rejected: {error}"));
             continue;
         }
 
@@ -4642,18 +4711,35 @@ fn discover_activation_artifacts(
             }
         }
     }
-    let required: BTreeSet<_> = policy
+    let missing = policy
         .secrets
         .iter()
-        .filter_map(|(id, secret)| (secret.phase == phase).then_some(id.clone()))
+        .filter(|(id, secret)| secret.phase == phase && !selected.contains_key(*id))
+        .map(|(id, _)| readiness::MissingArtifact {
+            secret_id: id.clone(),
+            reasons: rejected.remove(id).unwrap_or_else(|| {
+                BTreeSet::from([
+                    "no matching verified artifact; prepare and install this target's artifacts"
+                        .to_owned(),
+                ])
+            }),
+        })
         .collect();
-    let found: BTreeSet<_> = selected.keys().cloned().collect();
-    if found != required {
-        bail!(
-            "target-local cache lacks one or more verified artifacts required by the compiled plan"
-        );
-    }
-    Ok(selected)
+    Ok(readiness::Inspection {
+        report: readiness::Report {
+            target: policy.target_id.clone(),
+            phase,
+            cache_root: cache_root.to_owned(),
+            required: policy
+                .secrets
+                .values()
+                .filter(|secret| secret.phase == phase)
+                .count(),
+            verified: selected.len(),
+            missing,
+        },
+        selected,
+    })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -7750,6 +7836,19 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
         );
         nix_seal_policy::validate(&plan)?;
         fs::write(&plan_path, nix_seal_policy::canonical_json(&plan)?)?;
+
+        // A valid plan is not ready to activate when its cache is empty.
+        assert!(
+            run_doctor(
+                &plan_path,
+                &repository,
+                Some(temporary.path().join("unprepared-cache")),
+                None,
+                true,
+            )
+            .is_err(),
+            "doctor must report missing required artifacts as a failure"
+        );
 
         run_provision(
             ProvisionArgs {

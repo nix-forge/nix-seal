@@ -993,6 +993,23 @@ in
       );
       description = "Runtime-rendered template outputs. Accepts an attribute set or a list of names and named option sets. Each output accepts public text, a public file, or full options.";
     };
+    deploymentTargets = mkOption {
+      type = types.listOf types.attrs;
+      internal = true;
+      default = [ ];
+      description = "Targets included in configuration-wide artifact preparation.";
+    };
+    deploymentFile = mkOption {
+      type = types.path;
+      readOnly = true;
+      default = pkgs.writeText "nix-seal-deployment.json" (
+        builtins.toJSON {
+          schema = "nix-seal.deployment.v1";
+          targets = cfg.deploymentTargets;
+        }
+      );
+      description = "Public preparation description for the system and its embedded Home Manager targets. Use nix-seal prepare --flake with the configuration selector; private key paths are supplied only to that command.";
+    };
     activationSpec = mkOption {
       type = types.path;
       readOnly = true;
@@ -1010,6 +1027,15 @@ in
   config = mkIf cfg.enable (
     lib.mkMerge [
       {
+        nixSeal.deploymentTargets = lib.mkBefore [
+          {
+            target = cfg.targetId;
+            plan = toString cfg.planFile;
+            cacheRoot = cfg.artifactCacheRoot;
+            user = if homeManagerRuntimeIdentity then config.home.username else null;
+            specs = map toString (builtins.attrValues cfg.activationSpecs);
+          }
+        ];
         nixSeal.identities = lib.mkIf (cfg.publicKey != null) {
           target = {
             kind = "target";

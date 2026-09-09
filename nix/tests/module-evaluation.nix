@@ -353,6 +353,50 @@ let
 
 in
 {
+  deployment-readiness =
+    let
+      integrated = configuration.extendModules {
+        modules = [
+          ({ lib, ... }: {
+            options.home-manager.users = lib.mkOption {
+              type = lib.types.attrs;
+              default.tester = standaloneHomeConfiguration.config;
+            };
+          })
+        ];
+      };
+      destinations = integrated.config.nixSeal.deploymentTargets;
+      preflight = integrated.config.system.preSwitchChecks.nixSealReadiness;
+    in
+    assert
+      map (destination: destination.target) destinations == [
+        targetId
+        "home/tester/fixture"
+      ];
+    assert (builtins.head destinations).user == null;
+    assert (builtins.elemAt destinations 1).user == "tester";
+    assert lib.hasInfix "runuser" preflight;
+    assert lib.hasInfix "--spec" preflight;
+    assert lib.hasInfix "readiness_failed=1" preflight;
+    assert lib.hasInfix "exit 1" preflight;
+    assert builtins.elem "writeBoundary"
+      standaloneHomeConfiguration.config.home.activation.nixSealReadiness.before;
+    pkgs.runCommand "nix-seal-deployment-readiness"
+      {
+        nativeBuildInputs = [
+          self.packages.${system}.nix-seal
+          pkgs.jq
+        ];
+      }
+      ''
+        jq -e '.schema == "nix-seal.deployment.v1" and (.targets | length) == 2' ${integrated.config.nixSeal.deploymentFile}
+        if nix-seal readiness --spec ${configuration.config.nixSeal.activationSpecs.activation} --json > report.json; then
+          echo "readiness accepted an unprepared system" >&2
+          exit 1
+        fi
+        jq -e '.ready == false and (.artifacts[0].missing | length) > 0' report.json
+        touch "$out"
+      '';
   public-template-values =
     let
       templates = import ../lib/templates.nix { inherit lib; };

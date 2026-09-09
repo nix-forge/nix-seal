@@ -165,146 +165,194 @@ in
       description = "Bounded total capacity of the Linux nix-seal tmpfs.";
     };
   };
-  config = lib.mkIf cfg.enable {
-    nixSeal.runtimeStorage = lib.mkDefault (
-      if cfg.linux.volatileRuntime.enable then "volatile-tmpfs-noswap" else "persistent"
-    );
-    fileSystems.${cfg.linux.volatileRuntime.root} = lib.mkIf cfg.linux.volatileRuntime.enable {
-      device = "tmpfs";
-      fsType = "tmpfs";
-      options = [
-        # The mount root must be traversable by embedded Home Manager users;
-        # its system and per-user children remain private 0700 directories.
-        "mode=0711"
-        "size=${cfg.linux.volatileRuntime.size}"
-        "nosuid"
-        "nodev"
-        "noexec"
-        "noswap"
-      ];
-    };
-    warnings = lib.optional cfg.installerMode ''
-      nixSeal installer mode is active: partitioning is not scheduled by the
-      normal NixOS activation graph. Invoke the generated activation spec only
-      from reviewed installer orchestration over a protected channel.'';
-    assertions = [
-      {
-        assertion = !(cfg.activationSpecs ? partitioning) || cfg.installerMode;
-        message = "nixSeal partitioning-phase secrets require explicit nixSeal.installerMode=true; the module never schedules partitioning activation automatically";
-      }
-      {
-        assertion =
-          !(cfg.activationSpecs ? users)
-          || lib.all (secret: secret.owner == "root" && secret.group == "root") (
-            builtins.attrValues (lib.filterAttrs (_: secret: secret.phase == "users") cfg.secrets)
-          );
-        message = "nixSeal users-phase secrets must be owned by root:root until user accounts exist";
-      }
-      {
-        assertion =
-          !(cfg.activationSpecs ? users)
-          || lib.all (template: template.owner == "root" && template.group == "root") (
-            builtins.attrValues (lib.filterAttrs (_: template: template.phase == "users") cfg.templates)
-          );
-        message = "nixSeal users-phase templates must be owned by root:root until user accounts exist";
-      }
-    ];
-    system.activationScripts = lib.mkMerge [
-      (lib.mkIf cfg.linux.volatileRuntime.enable {
-        nixSealRuntime = {
-          # Custom fileSystems mounts are normally started by systemd after
-          # switch activation. Mount this fixed, declarative tmpfs before
-          # validating or writing any nix-seal runtime state.
-          deps = [
-            "etc"
-            "specialfs"
-          ];
-          text = "${runtimeActivation}";
-        };
-        nixSealRuntimeUsers = {
-          deps = [
-            "users"
-            "nixSealRuntime"
-          ];
-          text = prepare;
-        };
-      })
-      (lib.mkIf (cfg.activationSpecs ? users) {
-        users.deps = lib.mkAfter [ "nixSealUsers" ];
-        nixSealUsers = {
-          deps = [ "specialfs" ] ++ runtimeDeps;
-          text = activate cfg.activationSpecs.users;
-        };
-      })
-      (lib.mkIf (cfg.activationSpecs ? activation) {
-        nixSeal = {
-          deps = [ "users" ] ++ runtimeDeps;
-          text = activate cfg.activationSpecs.activation;
-        };
-      })
-      (lib.mkIf (cfg.activationSpecs ? services) {
-        nixSealServices = {
-          deps = (if cfg.activationSpecs ? activation then [ "nixSeal" ] else [ "users" ]) ++ runtimeDeps;
-          text = activate cfg.activationSpecs.services;
-        };
-      })
-    ];
-    # User managers can start for lingering users before normal login sessions.
-    # Both they and embedded Home Manager need the private runtime roots first.
-    systemd.services = lib.mkMerge [
-      (lib.listToAttrs (
-        map (
-          user:
-          lib.nameValuePair "home-manager-${user}" {
-            # Home Manager runs as the profile owner. Only this root-owned setup
-            # command starts the user manager; secret activation stays unprivileged.
-            serviceConfig.ExecStartPre = lib.mkBefore [ "+${startUserManager user}" ];
-          }
-        ) serviceManagerUsers
-      ))
-      (lib.mkIf cfg.linux.volatileRuntime.enable (
+  config = lib.mkMerge [
+    (lib.mkIf cfg.enable {
+      nixSeal.runtimeStorage = lib.mkDefault (
+        if cfg.linux.volatileRuntime.enable then "volatile-tmpfs-noswap" else "persistent"
+      );
+      fileSystems.${cfg.linux.volatileRuntime.root} = lib.mkIf cfg.linux.volatileRuntime.enable {
+        device = "tmpfs";
+        fsType = "tmpfs";
+        options = [
+          # The mount root must be traversable by embedded Home Manager users;
+          # its system and per-user children remain private 0700 directories.
+          "mode=0711"
+          "size=${cfg.linux.volatileRuntime.size}"
+          "nosuid"
+          "nodev"
+          "noexec"
+          "noswap"
+        ];
+      };
+      warnings = lib.optional cfg.installerMode ''
+        nixSeal installer mode is active: partitioning is not scheduled by the
+        normal NixOS activation graph. Invoke the generated activation spec only
+        from reviewed installer orchestration over a protected channel.'';
+      assertions = [
         {
-          "user@" = lib.mkIf (embeddedHomeManagerUsers != [ ]) {
+          assertion = !(cfg.activationSpecs ? partitioning) || cfg.installerMode;
+          message = "nixSeal partitioning-phase secrets require explicit nixSeal.installerMode=true; the module never schedules partitioning activation automatically";
+        }
+        {
+          assertion =
+            !(cfg.activationSpecs ? users)
+            || lib.all (secret: secret.owner == "root" && secret.group == "root") (
+              builtins.attrValues (lib.filterAttrs (_: secret: secret.phase == "users") cfg.secrets)
+            );
+          message = "nixSeal users-phase secrets must be owned by root:root until user accounts exist";
+        }
+        {
+          assertion =
+            !(cfg.activationSpecs ? users)
+            || lib.all (template: template.owner == "root" && template.group == "root") (
+              builtins.attrValues (lib.filterAttrs (_: template: template.phase == "users") cfg.templates)
+            );
+          message = "nixSeal users-phase templates must be owned by root:root until user accounts exist";
+        }
+      ];
+      system.activationScripts = lib.mkMerge [
+        (lib.mkIf cfg.linux.volatileRuntime.enable {
+          nixSealRuntime = {
+            # Custom fileSystems mounts are normally started by systemd after
+            # switch activation. Mount this fixed, declarative tmpfs before
+            # validating or writing any nix-seal runtime state.
+            deps = [
+              "etc"
+              "specialfs"
+            ];
+            text = "${runtimeActivation}";
+          };
+          nixSealRuntimeUsers = {
+            deps = [
+              "users"
+              "nixSealRuntime"
+            ];
+            text = prepare;
+          };
+        })
+        (lib.mkIf (cfg.activationSpecs ? users) {
+          users.deps = lib.mkAfter [ "nixSealUsers" ];
+          nixSealUsers = {
+            deps = [ "specialfs" ] ++ runtimeDeps;
+            text = activate cfg.activationSpecs.users;
+          };
+        })
+        (lib.mkIf (cfg.activationSpecs ? activation) {
+          nixSeal = {
+            deps = [ "users" ] ++ runtimeDeps;
+            text = activate cfg.activationSpecs.activation;
+          };
+        })
+        (lib.mkIf (cfg.activationSpecs ? services) {
+          nixSealServices = {
+            deps = (if cfg.activationSpecs ? activation then [ "nixSeal" ] else [ "users" ]) ++ runtimeDeps;
+            text = activate cfg.activationSpecs.services;
+          };
+        })
+      ];
+      # User managers can start for lingering users before normal login sessions.
+      # Both they and embedded Home Manager need the private runtime roots first.
+      systemd.services = lib.mkMerge [
+        (lib.listToAttrs (
+          map (
+            user:
+            lib.nameValuePair "home-manager-${user}" {
+              # Home Manager runs as the profile owner. Only this root-owned setup
+              # command starts the user manager; secret activation stays unprivileged.
+              serviceConfig.ExecStartPre = lib.mkBefore [ "+${startUserManager user}" ];
+            }
+          ) serviceManagerUsers
+        ))
+        (lib.mkIf cfg.linux.volatileRuntime.enable (
+          {
+            "user@" = lib.mkIf (embeddedHomeManagerUsers != [ ]) {
+              after = [ "nix-seal-runtime.service" ];
+              # Do not stop login sessions when runtime preparation restarts.
+              wants = [ "nix-seal-runtime.service" ];
+            };
+          }
+          // lib.genAttrs (map (user: "home-manager-${user}") embeddedHomeManagerUsers) (_: {
             after = [ "nix-seal-runtime.service" ];
-            # Do not stop login sessions when runtime preparation restarts.
-            wants = [ "nix-seal-runtime.service" ];
+            requires = [ "nix-seal-runtime.service" ];
+          })
+        ))
+        {
+          nix-seal-runtime = lib.mkIf cfg.linux.volatileRuntime.enable {
+            description = "Prepare nix-seal Linux volatile runtime";
+            wantedBy = [ "multi-user.target" ];
+            before = [ "nix-seal-activate.service" ];
+            after = [ "local-fs.target" ];
+            unitConfig.RequiresMountsFor = cfg.linux.volatileRuntime.root;
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = true;
+              UMask = "0077";
+              ExecStart = utils.escapeSystemdExecArgs (runtimeArguments "prepare" embeddedHomeManagerUsers);
+            };
+          };
+          nix-seal-activate = {
+            description = "Materialize nix-seal runtime generation";
+            wantedBy = [ "multi-user.target" ];
+            before = [ "multi-user.target" ];
+            after = [ "local-fs.target" ];
+            requires = lib.optional cfg.linux.volatileRuntime.enable "nix-seal-runtime.service";
+            wants = lib.optional cfg.linux.volatileRuntime.enable "nix-seal-runtime.service";
+            unitConfig.RequiresMountsFor = lib.optional cfg.linux.volatileRuntime.enable cfg.linux.volatileRuntime.root;
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = true;
+              UMask = "0077";
+              ExecStart = bootActivationCommands;
+            };
           };
         }
-        // lib.genAttrs (map (user: "home-manager-${user}") embeddedHomeManagerUsers) (_: {
-          after = [ "nix-seal-runtime.service" ];
-          requires = [ "nix-seal-runtime.service" ];
-        })
-      ))
-      {
-        nix-seal-runtime = lib.mkIf cfg.linux.volatileRuntime.enable {
-          description = "Prepare nix-seal Linux volatile runtime";
-          wantedBy = [ "multi-user.target" ];
-          before = [ "nix-seal-activate.service" ];
-          after = [ "local-fs.target" ];
-          unitConfig.RequiresMountsFor = cfg.linux.volatileRuntime.root;
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            UMask = "0077";
-            ExecStart = utils.escapeSystemdExecArgs (runtimeArguments "prepare" embeddedHomeManagerUsers);
-          };
-        };
-        nix-seal-activate = {
-          description = "Materialize nix-seal runtime generation";
-          wantedBy = [ "multi-user.target" ];
-          before = [ "multi-user.target" ];
-          after = [ "local-fs.target" ];
-          requires = lib.optional cfg.linux.volatileRuntime.enable "nix-seal-runtime.service";
-          wants = lib.optional cfg.linux.volatileRuntime.enable "nix-seal-runtime.service";
-          unitConfig.RequiresMountsFor = lib.optional cfg.linux.volatileRuntime.enable cfg.linux.volatileRuntime.root;
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            UMask = "0077";
-            ExecStart = bootActivationCommands;
-          };
-        };
-      }
-    ];
-  };
+      ];
+    })
+    {
+      nixSeal.deploymentTargets = lib.mkAfter (
+        lib.concatMap (
+          user: config.home-manager.users.${user}.nixSeal.deploymentTargets or [ ]
+        ) embeddedHomeManagerUsers
+      );
+      system.preSwitchChecks.nixSealReadiness = lib.mkIf (cfg.deploymentTargets != [ ]) (
+        let
+          check =
+            destination:
+            let
+              command = lib.escapeShellArgs (
+                lib.optionals (destination.user != null) [
+                  "${pkgs.util-linux}/bin/runuser"
+                  "--user"
+                  destination.user
+                  "--"
+                ]
+                ++ [
+                  (lib.getExe cfg.package)
+                  "readiness"
+                ]
+                ++ lib.concatMap (spec: [
+                  "--spec"
+                  (toString spec)
+                ]) destination.specs
+              );
+            in
+            lib.optionalString (destination.specs != [ ]) ''
+              if ! ${command}; then readiness_failed=1; fi
+            '';
+        in
+        ''
+          readiness_failed=0
+          ${lib.concatMapStringsSep "\n" check cfg.deploymentTargets}
+          if [ "$readiness_failed" -ne 0 ]; then
+            echo "nix-seal: prepare this configuration before switching; services have not been stopped." >&2
+            echo "nix-seal: use 'nix-seal prepare --deployment ${cfg.deploymentFile}' with your administrator key paths; add --administrator-host when the keys are remote." >&2
+            exit 1
+          fi
+        ''
+      );
+      system.systemBuilderCommands = lib.mkIf (cfg.deploymentTargets != [ ]) ''
+        ln -s ${cfg.deploymentFile} "$out/nix-seal-deployment.json"
+      '';
+    }
+  ];
 }

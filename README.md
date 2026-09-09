@@ -332,6 +332,62 @@ ciphertext's SHA-256 hash, while activation verifies a matching signed bundle
 directly from the target-local cache. Private identity locations, signing keys,
 and plaintext never enter the plan or Nix store.
 
+### Prepare a configuration before switching
+
+Run preparation from the target machine's checkout. Select the configuration;
+nix-seal discovers its system and embedded Home Manager plans and cache locations:
+
+```console
+nix-seal prepare --flake .#nixosConfigurations.workstation \
+  --identity /private/admin.agekey --signing-key /private/release.key
+```
+
+This is a dry run. Add `--execute` to prepare missing artifacts, install them,
+and verify readiness. Then run your normal system switch. Repeating the command
+reuses matching verified artifacts and retains previous cache generations.
+No secret values or private keys belong in command arguments; the arguments above
+are file paths.
+
+When the keys are on another machine, add an SSH destination. The key paths then
+refer to files on that administrator machine:
+
+```console
+nix-seal prepare --flake .#nixosConfigurations.workstation \
+  --administrator-host admin.example \
+  --identity /private/admin.agekey --signing-key /private/release.key
+```
+
+Both machines need a nix-seal version supporting `prepare`. Use
+`--administrator-program /path/to/nix-seal` when the remote executable is not on
+its SSH PATH. Review the dry run, then repeat with `--execute`. Only canonical
+ciphertext and public plans travel to the administrator. Signed ciphertext
+returns to the target, which verifies the complete batch before installation.
+Administrator keys stay on their machine. Installing a system or another user's
+cache prompts for sudo; the administrator key operation runs without elevation.
+The destination user accounts must already exist.
+
+Use `--repository-root` when running outside the checkout containing canonical
+ciphertext. `--deployment /path/to/built-system` prepares the exact plans included
+in an already built NixOS system; an explicit `nixSeal.deploymentFile` also works.
+For other configurations, select `.#darwinConfigurations.workstation` or
+`.#homeConfigurations.user` with `--flake`. Nix evaluates/builds only the public
+deployment description, not the host system closure.
+
+Preparation reports whether artifacts were prepared and installed. It never
+runs activation. If installation fails, correct the reported permission or
+transport problem and rerun the same command; prepared artifacts remain in the
+administrator's cache. Large deployments exceeding the 128 MiB preparation
+exchange limit can use the existing `provision` and cache export/import commands.
+Policies requiring multiple signatures reuse fully approved artifacts; missing
+artifacts require `provision` and `artifact approve` with the required signers.
+
+NixOS checks all declared caches before switching or selecting a new boot
+configuration. A missing artifact stops the switch before services stop. Home
+Manager also checks before writing the home environment. These checks do not
+need private keys. Nix-darwin supports preparation and explicit readiness but
+does not yet have the NixOS pre-switch hook. A successful readiness check does not
+guarantee later service startup, and activation rechecks signatures and expiry.
+
 ### Target-local artifact cache (recommended)
 
 After provisioning, transfer the ciphertext-only artifact to the target and
@@ -583,7 +639,18 @@ public-policy and canonical-ciphertext checks used before deployment, then
 reports authenticated and stale cache-artifact counts plus platform/runtime
 caveats. An artifact is authenticated only when its current plan, target policy,
 source hash, recipient, address, manifest, and approval threshold all verify. It
-emits only public metadata and does not decrypt secrets.
+emits only public metadata and does not decrypt secrets. A valid plan with missing
+required artifacts now exits nonzero, with `planValid: true`, `ready: false`, and
+`ok: false` in JSON. Per-target reports identify the missing secret IDs and
+candidate rejection reasons. Multiple generations of one secret cannot satisfy
+another secret's requirement.
+
+`nix-seal readiness --spec /path/to/activation.json` checks installed artifacts
+without needing canonical sources or identities. Repeat `--spec` to check every
+phase for the invoking cache owner. Failures include all selected specifications;
+`--json` emits one report with `ready`, `artifacts`, and `errors`. Run the check as
+the cache owner. Unlike `doctor`, this command does not need an administrator
+checkout and is suitable for deployment checks.
 
 Non-usage failures use stable exit categories: `1` operational, `3` policy, `4`
 cryptographic or approval verification, `5` cache/canonical-storage, and `6`
