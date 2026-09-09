@@ -73,6 +73,9 @@ pkgs.testers.nixosTest {
     with subtest("first activation precedes account creation"):
         machine.succeed("userdel tester")
         machine.succeed("umount --all-targets /run/nix-seal")
+        machine.succeed("rmdir /run/nix-seal")
+        machine.succeed("env DRY_ACTIVATE=1 /etc/nix-seal-runtime-activation")
+        machine.succeed("test ! -e /run/nix-seal")
         machine.succeed("/etc/nix-seal-runtime-activation")
         machine.succeed("useradd -m tester")
         machine.succeed("bash /etc/nix-seal-runtime-users")

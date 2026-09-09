@@ -8,6 +8,7 @@ self:
 }:
 let
   cfg = config.nixSeal;
+  inherit (import ./support.nix { inherit lib pkgs; }) groupCredentials escapeSystemdExecArgs;
   integratedLinuxVolatile =
     pkgs.stdenv.hostPlatform.isLinux
     && osConfig != null
@@ -32,13 +33,6 @@ let
     "services"
   ];
   credentialId = value: builtins.head (lib.splitString ":" (toString value));
-  groupCredentials = lib.foldl' (
-    grouped: binding:
-    let
-      unit = lib.removeSuffix ".service" binding.unit;
-    in
-    grouped // { ${unit} = (grouped.${unit} or [ ]) ++ [ "${binding.name}:${binding.path}" ]; }
-  ) { };
   activate =
     phase: spec:
     let
@@ -190,7 +184,16 @@ in
                 Type = "oneshot";
                 RemainAfterExit = true;
                 UMask = "0077";
-                ExecStart = lib.concatStringsSep " " (persistentActivationArguments phase);
+                ExecStart =
+                  escapeSystemdExecArgs (lib.init (persistentActivationArguments phase))
+                  + " "
+                  + (
+                    # Only this internally generated path may expand a specifier.
+                    if !integratedLinuxVolatile then
+                      builtins.toJSON (runtimeRootFor phase)
+                    else
+                      escapeSystemdExecArgs [ (runtimeRootFor phase) ]
+                  );
               };
               Install.WantedBy = [ "default.target" ];
             };

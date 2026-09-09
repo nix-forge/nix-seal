@@ -7,6 +7,8 @@
 let
   lib = inputs.nixpkgs.lib;
   targetId = "host/test";
+  literalIdentity = "/run/keys/test identity%literal$dollar'quote";
+  encodedIdentity = ''"/run/keys/test identity%%literal$$dollar'quote"'';
   secretId = "service/token";
   source = "nix-seal.example.toml";
   identities = {
@@ -68,6 +70,35 @@ let
     };
   };
   scopedRepositoryRoot = ./fixtures;
+  customDirectoryConfiguration = scopedConfiguration.extendModules {
+    modules = [ { nixSeal.secretDirectory = "hosts/shared"; } ];
+  };
+  sharedDirectoryConfiguration = scopedConfiguration.extendModules {
+    modules = [
+      {
+        nixSeal = {
+          sharedSecretDirectory = "modules/shared";
+          secrets."nix-access-tokens".shared = true;
+        };
+      }
+    ];
+  };
+  sharedHomeConfiguration = standaloneHomeConfiguration.extendModules {
+    modules = [
+      {
+        nixSeal = {
+          secretDirectory = "homes/shared";
+          sharedSecretDirectory = "modules/shared";
+          secrets."nix-access-tokens".shared = true;
+        };
+      }
+    ];
+  };
+  explicitSourceConfiguration = sharedDirectoryConfiguration.extendModules {
+    modules = [
+      { nixSeal.secrets."nix-access-tokens".source = "hosts/shared/nix-access-tokens.age"; }
+    ];
+  };
   configuration = inputs.nixpkgs.lib.nixosSystem {
     inherit system;
     modules = [
@@ -82,7 +113,7 @@ let
             target
             approvalPolicies
             ;
-          identityFile = "/run/keys/nix-seal-target";
+          identityFile = literalIdentity;
           artifactCacheRoot = "/var/lib/nix-seal/cache/v1";
           repositoryRoot = ../../.;
           secrets.${secretId} = {
@@ -161,7 +192,7 @@ let
         nixSeal = {
           enable = true;
           administrator = "alice";
-          identityFile = "/run/keys/nix-seal-target";
+          identityFile = literalIdentity;
           artifactCacheRoot = "/home/tester/.cache/nix-seal";
           repositoryRoot = scopedRepositoryRoot;
           identities.target = {
@@ -255,6 +286,45 @@ in
       scopedConfiguration.config.nixSeal.secrets."nix-access-tokens".source
       == "secrets/alice/hosts/nixos/fixture/nix-access-tokens.age";
     pkgs.runCommand "nix-seal-scoped-target-and-administrator-projection" { } "touch $out";
+  configurable-secret-directories =
+    let
+      custom = customDirectoryConfiguration.config.nixSeal;
+      shared = sharedDirectoryConfiguration.config.nixSeal;
+      home = sharedHomeConfiguration.config.nixSeal;
+      original = scopedConfiguration.config.nixSeal;
+    in
+    assert custom.secrets."nix-access-tokens".source == "hosts/shared/nix-access-tokens.age";
+    assert shared.secrets."nix-access-tokens".source == "modules/shared/nix-access-tokens.age";
+    assert home.secrets."nix-access-tokens".source == shared.secrets."nix-access-tokens".source;
+    assert custom.secrets."nix-access-tokens".id == original.secrets."nix-access-tokens".id;
+    assert custom.secrets."nix-access-tokens".path == original.secrets."nix-access-tokens".path;
+    assert home.secrets."nix-access-tokens".id != shared.secrets."nix-access-tokens".id;
+    assert
+      explicitSourceConfiguration.config.nixSeal.secrets."nix-access-tokens".source
+      == "hosts/shared/nix-access-tokens.age";
+    assert lib.all
+      (
+        directory:
+        !(builtins.tryEval
+          (scopedConfiguration.extendModules { modules = [ { nixSeal.secretDirectory = directory; } ]; })
+          .config.nixSeal.secretDirectory
+        ).success
+      )
+      [
+        ""
+        "/tmp/secrets"
+        "../secrets"
+        "hosts/../secrets"
+        "hosts//shared"
+        "hosts/./shared"
+        "hosts/shared/"
+      ];
+    pkgs.runCommand "nix-seal-configurable-secret-directories" { nativeBuildInputs = [ pkgs.jq ]; } ''
+      jq -e '.secrets["alice/hosts/nixos/fixture/nix-access-tokens"].source == "hosts/shared/nix-access-tokens.age"' ${custom.planFile} >/dev/null
+      jq -e '.secrets["alice/hosts/nixos/fixture/nix-access-tokens"].consumers == ["host/nixos/fixture"]' ${shared.planFile} >/dev/null
+      jq -e '.secrets["alice/users/tester/nix-access-tokens"].consumers == ["home/tester/fixture"]' ${home.planFile} >/dev/null
+      touch "$out"
+    '';
   scoped-plan-administrator-projection =
     pkgs.runCommand "nix-seal-scoped-plan-administrator-projection" { nativeBuildInputs = [ pkgs.jq ]; }
       ''
@@ -290,6 +360,54 @@ in
         ' ${bootstrapConfiguration.config.nixSeal.bootstrapPlanFile} >/dev/null
         touch "$out"
       '';
+  literal-service-arguments =
+    assert lib.all (
+      command: lib.hasInfix encodedIdentity command
+    ) configuration.config.systemd.services.nix-seal-activate.serviceConfig.ExecStart;
+    assert
+      !pkgs.stdenv.hostPlatform.isLinux
+      || (
+        lib.hasInfix encodedIdentity (
+          builtins.head (
+            lib.toList standaloneHomeConfiguration.config.systemd.user.services.nix-seal-activation.Service.ExecStart
+          )
+        )
+        && lib.hasSuffix ''"%t/nix-seal"'' (
+          builtins.head (
+            lib.toList standaloneHomeConfiguration.config.systemd.user.services.nix-seal-activation.Service.ExecStart
+          )
+        )
+        && lib.hasSuffix ''"%t/nix-seal/services"'' (
+          builtins.head (
+            lib.toList standaloneHomeConfiguration.config.systemd.user.services.nix-seal-services.Service.ExecStart
+          )
+        )
+      );
+    assert
+      (import ../modules/support.nix { inherit lib pkgs; }).groupCredentials [
+        {
+          unit = "alpha.service";
+          name = "one";
+          path = "/run/one";
+        }
+        {
+          unit = "beta.service";
+          name = "two";
+          path = "/run/two";
+        }
+        {
+          unit = "alpha.service";
+          name = "three";
+          path = "/run/three";
+        }
+      ] == {
+        alpha = [
+          "one:/run/one"
+          "three:/run/three"
+        ];
+        beta = [ "two:/run/two" ];
+      };
+    pkgs.runCommand "nix-seal-literal-service-arguments" { } "touch $out";
   derived-home-target =
     assert standaloneHomeConfiguration.config.nixSeal.targetId == "home/tester/fixture";
     assert standaloneHomeConfiguration.config.nixSeal.secretScope == "users/tester";
@@ -325,6 +443,56 @@ in
     test ! -e "$XDG_RUNTIME_DIR"
     touch "$out"
   '';
+  runtime-mountpoint =
+    pkgs.runCommand "nix-seal-runtime-mountpoint"
+      {
+        nativeBuildInputs = [ pkgs.python3 ];
+        activation = configuration.config.system.activationScripts.nixSealRuntime.text;
+      }
+      ''
+        python3 <<'PY'
+        import os
+        import pathlib
+        import subprocess
+
+        root = pathlib.Path.cwd() / "runtime"
+        mounted = pathlib.Path.cwd() / "mounted"
+        events = pathlib.Path.cwd() / "events"
+        mock = pathlib.Path.cwd() / "mount-probe"
+        mock.write_text("""#!${pkgs.python3}/bin/python3
+        import pathlib, sys
+        root = pathlib.Path(sys.argv[-1])
+        if sys.argv[1] == "--quiet":
+            sys.exit(0 if pathlib.Path("mounted").exists() else 1)
+        if not root.is_dir():
+            sys.exit("mount point does not exist")
+        pathlib.Path("mounted").touch()
+        with pathlib.Path("events").open("a") as output:
+            output.write("mount\\n")
+        """)
+        mock.chmod(0o700)
+        source = pathlib.Path(os.environ["activation"].strip()).read_text()
+        source = source.replace("/run/nix-seal", str(root))
+        source = source.replace("${pkgs.util-linux}/bin/mountpoint", str(mock))
+        source = source.replace("${pkgs.util-linux}/bin/mount", str(mock))
+        # Exercise the generated mount logic without materializing any secrets.
+        source = source.replace("${lib.getExe configuration.config.nixSeal.package}", "true")
+        script = pathlib.Path("activation.sh")
+        script.write_text(source)
+        subprocess.run(
+            ["${pkgs.bash}/bin/bash", str(script)],
+            env=dict(os.environ, DRY_ACTIVATE="1"), check=True,
+        )
+        assert not root.exists() and not mounted.exists()
+        subprocess.run(["${pkgs.bash}/bin/bash", str(script)], check=True)
+        marker = root / "existing-generation"
+        marker.touch()
+        subprocess.run(["${pkgs.bash}/bin/bash", str(script)], check=True)
+        assert marker.exists()
+        assert events.read_text() == "mount\n"
+        PY
+        touch "$out"
+      '';
   service-credential-policy-projection =
     pkgs.runCommand "nix-seal-service-credential-policy-projection" { nativeBuildInputs = [ pkgs.jq ]; }
       ''

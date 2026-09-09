@@ -124,6 +124,7 @@ in
         nix-seal = nixSeal;
         inherit documentation;
       }
+      // import ../nix/tests/bash-writers.nix { inherit pkgs; }
       // import ../nix/tests/module-evaluation.nix {
         inherit inputs system pkgs;
         inherit (inputs) self;

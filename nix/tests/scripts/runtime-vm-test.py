@@ -3,6 +3,7 @@
 # current nixpkgs rejects a declaration that conflicts with that inferred type.
 start_all()
 machine.wait_for_unit("multi-user.target")
+machine.succeed("systemctl start nix-seal-argument-probe.service")
 
 machine.succeed(
     """
