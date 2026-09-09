@@ -149,6 +149,8 @@ in
 
   flake = {
     schemas = inputs.flake-schemas.exportedSchemas // {
+      ciChecks = inputs.flake-schemas.exportedSchemas.checks;
+      lintChecks = inputs.flake-schemas.exportedSchemas.checks;
       flakeModules = moduleSchema;
       homeManagerModules = moduleSchema;
       lib = exportSchema "library function or schema constant" (

@@ -50,3 +50,9 @@ same bounded time budget. Adding or removing a target changes CI automatically.
 Python syntax checks cover tracked Python files, and Ruff discovers files from
 the repository root. The type checker retains explicit scope for the runtime
 test DSL and CI scripts.
+
+Portable formatter and hook checks are exposed as `lintChecks` and run in the
+required x86 Linux Nix job. `ciChecks` contains every remaining native check,
+computed from `checks` rather than a separate allowlist. All three platforms
+build those checks through the shared CI action and validate flake output
+schemas. Ordinary `nix flake check` still builds the complete local check set.

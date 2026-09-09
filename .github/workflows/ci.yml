@@ -85,11 +85,21 @@ jobs:
         with:
           cache: 'false'
           cache-scope: ci-nix
-      - name: Materialize discovered partitions
-        uses: nix-forge/ci/actions/materialize-partitions@d84cb92725a2ab7eafcdc9d1f1fb7a06048dfa1a # v2.2.0
-      - env:
+      - name: Build every declared native check
+        uses: nix-forge/ci/actions/flake-checks@6ddb6f568f93b25a199c1d988c64ba2c2e9a3161 # v2.4.0
+        with:
+          system: ${{ matrix.system }}
+          checks-output: ciChecks
+      - name: Build portable lint checks once
+        if: matrix.system == 'x86_64-linux'
+        uses: nix-forge/ci/actions/flake-checks@6ddb6f568f93b25a199c1d988c64ba2c2e9a3161 # v2.4.0
+        with:
+          system: ${{ matrix.system }}
+          checks-output: lintChecks
+      - name: Validate flake output schemas
+        env:
           TARGET_SYSTEM: ${{ matrix.system }}
-        run: nix flake check --keep-going --show-trace --print-build-logs --system "$TARGET_SYSTEM"
+        run: nix flake check --no-build --show-trace --system "$TARGET_SYSTEM"
   tooling:
     name: tooling
     runs-on: ubuntu-24.04
