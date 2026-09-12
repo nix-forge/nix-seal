@@ -23,6 +23,7 @@ use base64::{
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use ed25519_dalek::SigningKey;
 use fs2::FileExt;
+use nix_seal_runtime::child::{ChildTermination, SupervisedChild};
 use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox, SecretString};
 use sha2::{Digest, Sha256};
 use std::{
@@ -3601,21 +3602,17 @@ fn generate_external_values(
         output_count: generator.outputs.len(),
         public_output_count: generator.public_outputs.len(),
     };
-    let mut child = spawn_external_generator(generator, &executable, &layout)?;
+    let child = spawn_external_generator(generator, &executable, &layout)?;
     let deadline = Instant::now() + Duration::from_secs(u64::from(generator.timeout_seconds));
-    loop {
-        match child
-            .try_wait()
-            .context("could not observe constrained generator")?
-        {
-            Some(status) if status.success() => break,
-            Some(_) => bail!("constrained generator failed"),
-            None if Instant::now() >= deadline => {
-                terminate_child_process_tree(&mut child);
-                bail!("constrained generator timed out");
-            }
-            None => thread::sleep(Duration::from_millis(10)),
-        }
+    let child = SupervisedChild::new(child, ChildTermination::ProcessGroup)
+        .context("could not observe constrained generator")?;
+    match child
+        .wait_until(deadline)
+        .context("could not observe constrained generator")?
+    {
+        Some(status) if status.success() => {}
+        Some(_) => bail!("constrained generator failed"),
+        None => bail!("constrained generator timed out"),
     }
     let expected = (0..generator.outputs.len())
         .map(|index| index.to_string())
@@ -9033,7 +9030,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
             executable: shell.to_string_lossy().into_owned(),
             arguments: vec![
                 "-c".to_owned(),
-                "test \"$NIX_SEAL_SECRET_COUNT\" = 1; test -f \"$NIX_SEAL_SECRET_DIR/0\"; test ! -e \"$NIX_SEAL_SECRET_DIR/1\"; IFS= read -r value < \"$NIX_SEAL_SECRET_DIR/0\"; printf %s \"$value\" > \"$NIX_SEAL_OUTPUT_DIR/0\"".to_owned(),
+                "test \"$NIX_SEAL_SECRET_COUNT\" = 1 || exit 1; test -f \"$NIX_SEAL_SECRET_DIR/0\" || exit 1; test ! -e \"$NIX_SEAL_SECRET_DIR/1\" || exit 1; IFS= read -r value < \"$NIX_SEAL_SECRET_DIR/0\"; printf %s \"$value\" > \"$NIX_SEAL_OUTPUT_DIR/0\"".to_owned(),
             ],
             runtime_inputs: Vec::new(),
             timeout_seconds: 5,
