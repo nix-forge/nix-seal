@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 //! Authenticated, transactional runtime activation primitives.
 
+pub mod child;
+
 use fs2::FileExt;
 use nix_seal_core::{ActivationPhase, Id};
 use nix_seal_manifest::{ExpectedBinding, SignedEnvelopeV1, TrustedKeys};
@@ -13,7 +15,6 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    thread,
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
@@ -1313,27 +1314,19 @@ fn run_manager_action(
             }
         }
     }
-    let mut child = command
+    let child = command
         .spawn()
         .map_err(|_| RuntimeError::ServiceAction(unit.to_owned()))?;
     let deadline = Instant::now() + Duration::from_secs(actions.timeout_seconds);
-    loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|_| RuntimeError::ServiceAction(unit.to_owned()))?
-        {
-            return if status.success() {
-                Ok(())
-            } else {
-                Err(RuntimeError::ServiceAction(unit.to_owned()))
-            };
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(RuntimeError::ServiceTimeout(unit.to_owned()));
-        }
-        thread::sleep(Duration::from_millis(25));
+    let child = child::SupervisedChild::new(child, child::ChildTermination::Process)
+        .map_err(|_| RuntimeError::ServiceAction(unit.to_owned()))?;
+    match child
+        .wait_until(deadline)
+        .map_err(|_| RuntimeError::ServiceAction(unit.to_owned()))?
+    {
+        Some(status) if status.success() => Ok(()),
+        Some(_) => Err(RuntimeError::ServiceAction(unit.to_owned())),
+        None => Err(RuntimeError::ServiceTimeout(unit.to_owned())),
     }
 }
 
@@ -3019,19 +3012,19 @@ mod tests {
             .ok_or("spec was not an object")?
             .insert("unknown".to_owned(), serde_json::Value::Bool(true));
         assert!(serde_json::from_value::<ActivationSpecV2>(encoded).is_err());
-        let mut excessive_skew = spec;
+        let mut excessive_skew = spec.clone();
         excessive_skew.allowed_clock_skew = 86_401;
         assert!(matches!(
             excessive_skew.validate(),
             Err(RuntimeError::InvalidSpec)
         ));
-        let mut traversal = excessive_skew.clone();
+        let mut traversal = spec.clone();
         traversal.runtime_root = PathBuf::from("/run/nix-seal/../unsafe");
         assert!(matches!(
             traversal.validate(),
             Err(RuntimeError::InvalidSpec)
         ));
-        let mut source_traversal = excessive_skew.clone();
+        let mut source_traversal = spec;
         source_traversal.artifact_cache_root = PathBuf::from("/tmp/../cache");
         assert!(matches!(
             source_traversal.validate(),
@@ -3533,18 +3526,6 @@ mod tests {
         ));
         assert!(!fixture.runtime.exists());
         Ok(())
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn recognizes_only_direct_nix_store_artifact_paths() {
-        assert!(Path::new("/nix/store/abc-artifact/ciphertext.age").starts_with("/nix/store/"));
-        assert!(
-            !Path::new("/nix/storehouse/abc-artifact/ciphertext.age").starts_with("/nix/store/")
-        );
-        assert!(
-            !Path::new("/tmp/nix/store/abc-artifact/ciphertext.age").starts_with("/nix/store/")
-        );
     }
 
     #[cfg(unix)]

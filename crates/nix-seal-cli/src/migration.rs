@@ -485,17 +485,15 @@ pub(super) fn migrate_sops_document(
         .stdout
         .take()
         .context("SOPS migration stdout was unavailable")?;
-    let child = Arc::new(Mutex::new(child));
+    let child = Arc::new(SupervisedChild::new(child, ChildTermination::ProcessGroup)?);
     let (complete_tx, complete_rx) = mpsc::channel();
     let watchdog_child = Arc::clone(&child);
     let watchdog = thread::spawn(move || {
         if complete_rx
             .recv_timeout(EXTERNAL_MIGRATION_TIMEOUT)
             .is_err()
-            && let Ok(mut child) = watchdog_child.lock()
-            && child.try_wait().ok().flatten().is_none()
         {
-            terminate_child_process_tree(&mut child);
+            watchdog_child.terminate();
         }
     });
     let result = nix_seal_authoring::write_secret_checked(
@@ -609,17 +607,15 @@ pub(super) fn migrate_pgp_document(
         .stdout
         .take()
         .context("GnuPG migration stdout was unavailable")?;
-    let child = Arc::new(Mutex::new(child));
+    let child = Arc::new(SupervisedChild::new(child, ChildTermination::ProcessGroup)?);
     let (complete_tx, complete_rx) = mpsc::channel();
     let watchdog_child = Arc::clone(&child);
     let watchdog = thread::spawn(move || {
         if complete_rx
             .recv_timeout(EXTERNAL_MIGRATION_TIMEOUT)
             .is_err()
-            && let Ok(mut child) = watchdog_child.lock()
-            && child.try_wait().ok().flatten().is_none()
         {
-            terminate_child_process_tree(&mut child);
+            watchdog_child.terminate();
         }
     });
     let result = nix_seal_authoring::write_secret_checked(
@@ -707,35 +703,24 @@ pub(super) fn resolve_private_gnupg_home(path: &Path) -> Result<PathBuf> {
 }
 
 pub(super) fn wait_for_external_migration(
-    child: &Arc<Mutex<Child>>,
+    child: &SupervisedChild,
     timeout: Duration,
 ) -> Result<(), nix_seal_authoring::AuthoringError> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let status = child
-            .lock()
-            .map_err(|_| nix_seal_authoring::AuthoringError::ExternalInput)?
-            .try_wait()
-            .map_err(nix_seal_authoring::AuthoringError::Io)?;
-        if let Some(status) = status {
-            return if status.success() {
-                Ok(())
-            } else {
-                Err(nix_seal_authoring::AuthoringError::ExternalInput)
-            };
+    match child
+        .wait_until(Instant::now() + timeout)
+        .map_err(nix_seal_authoring::AuthoringError::Io)?
+    {
+        Some(status) if status.success() => Ok(()),
+        Some(_) => Err(nix_seal_authoring::AuthoringError::ExternalInput),
+        None => {
+            child.terminate();
+            Err(nix_seal_authoring::AuthoringError::ExternalInput)
         }
-        if Instant::now() >= deadline {
-            terminate_external_migration(child);
-            return Err(nix_seal_authoring::AuthoringError::ExternalInput);
-        }
-        thread::sleep(Duration::from_millis(10));
     }
 }
 
-pub(super) fn terminate_external_migration(child: &Arc<Mutex<Child>>) {
-    if let Ok(mut child) = child.lock() {
-        terminate_child_process_tree(&mut child);
-    }
+pub(super) fn terminate_external_migration(child: &SupervisedChild) {
+    child.terminate();
 }
 
 /// Starts an explicitly declared external executable in its own process group.
@@ -756,6 +741,7 @@ pub(super) fn isolate_child_process_group(command: &mut ProcessCommand) {
 #[cfg(not(unix))]
 pub(super) fn isolate_child_process_group(_command: &mut ProcessCommand) {}
 
+#[cfg(all(target_os = "linux", not(test)))]
 pub(super) fn terminate_child_process_tree(child: &mut Child) {
     #[cfg(unix)]
     {
