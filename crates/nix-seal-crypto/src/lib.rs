@@ -1414,7 +1414,7 @@ QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB\n\
         assert!(ciphertext.starts_with(b"age-encryption.org/v1"));
         assert!(
             !ciphertext
-                .windows(16)
+                .windows(identity.expose_secret().len())
                 .any(|window| window == identity.expose_secret().as_bytes())
         );
         let decrypted = decrypt_passphrase_identity(ciphertext.as_slice(), &passphrase)?;

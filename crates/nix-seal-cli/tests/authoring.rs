@@ -428,7 +428,7 @@ fn logical_collection_batch_authors_independent_ciphertexts()
     assert!(
         !authored
             .stdout
-            .windows(10)
+            .windows(b"batch-token".len())
             .any(|window| window == b"batch-token")
     );
     let password = run(
