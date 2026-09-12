@@ -384,6 +384,10 @@ in
       cat > nix-seal <<'EOF'
       #!${pkgs.runtimeShell}
       if [ "$1" = readiness ]; then
+        case " $* " in
+          *" --deployment "*) ;;
+          *) exit 2 ;;
+        esac
         echo "check:''${TEST_OWNER:-root}" >> "$PWD/events"
         if [ "''${TEST_OWNER:-root}" = "$FAIL_OWNER" ]; then
           echo "target-local cache lacks verified artifacts" >&2
@@ -407,7 +411,6 @@ in
         exit 1
       fi
       grep -q 'target-local cache lacks verified artifacts' error
-      grep -q 'nix-seal prepare --deployment' error
       printf 'check:root\ncheck:tester\n' > expected
       diff -u expected events
       export FAIL_OWNER=tester
@@ -437,6 +440,10 @@ in
   deployment-readiness =
     let
       integrated = configuration.extendModules {
+        specialArgs = {
+          configName = "fixture";
+          nixSealDefaultConfiguration = "nixosConfigurations.fixture";
+        };
         modules = [
           ({ lib, ... }: {
             options.home-manager.users = lib.mkOption {
@@ -448,6 +455,22 @@ in
       };
       destinations = integrated.config.nixSeal.deploymentTargets;
       preflight = integrated.config.system.preSwitchChecks.nixSealReadiness;
+      preflightScript = pkgs.writeText "nixos-readiness-preflight" (
+        builtins.unsafeDiscardStringContext (
+          lib.replaceStrings
+            [ (lib.getExe integrated.config.nixSeal.package) "${integrated.pkgs.util-linux}/bin/runuser" ]
+            [ "\"$PWD/readiness-probe\"" "\"$PWD/runuser-probe\"" ]
+            preflight
+        )
+      );
+      homePreflightScript = pkgs.writeText "home-readiness-preflight" (
+        builtins.unsafeDiscardStringContext (
+          lib.replaceStrings
+            [ (lib.getExe standaloneHomeConfiguration.config.nixSeal.package) ]
+            [ ''"$PWD/readiness-probe"'' ]
+            standaloneHomeConfiguration.config.home.activation.nixSealReadiness.data
+        )
+      );
     in
     assert
       map (destination: destination.target) destinations == [
@@ -456,10 +479,6 @@ in
       ];
     assert (builtins.head destinations).user == null;
     assert (builtins.elemAt destinations 1).user == "tester";
-    assert lib.hasInfix "runuser" preflight;
-    assert lib.hasInfix "--spec" preflight;
-    assert lib.hasInfix "readiness_failed=1" preflight;
-    assert lib.hasInfix "exit 1" preflight;
     assert builtins.elem "writeBoundary"
       standaloneHomeConfiguration.config.home.activation.nixSealReadiness.before;
     pkgs.runCommand "nix-seal-deployment-readiness"
@@ -470,16 +489,61 @@ in
         ];
       }
       ''
+        cat > readiness-probe <<'EOF'
+        #!${pkgs.runtimeShell}
+        test "$1" = readiness && test "$2" = --spec && test -n "$3" || exit 2
+        case " $* " in
+          *" --deployment "*) ;;
+          *) exit 2 ;;
+        esac
+        echo "''${TEST_OWNER:-root}" >> "$PWD/events"
+        test "''${TEST_OWNER:-root}" != "$FAIL_OWNER"
+        EOF
+        cat > runuser-probe <<'EOF'
+        #!${pkgs.runtimeShell}
+        test "$1" = --user && test "$2" = tester && test "$3" = -- || exit 2
+        export TEST_OWNER="$2"
+        shift 3
+        exec "$@"
+        EOF
+        chmod +x readiness-probe runuser-probe
+        grep -q -- '--default-configuration' ${preflightScript}
+        if grep -q -- '--default-configuration' ${homePreflightScript}; then
+          echo "Standalone Home Manager incorrectly claimed the flake default" >&2
+          exit 1
+        fi
+        printf 'root\ntester\n' > expected
+        for owner in root tester; do
+          export FAIL_OWNER="$owner"
+          : > events
+          if ${pkgs.runtimeShell} ${preflightScript} 2> error; then
+            echo "Readiness preflight accepted missing $owner artifacts" >&2
+            exit 1
+          fi
+          diff -u expected events
+        done
+        export FAIL_OWNER=none
+        : > events
+        ${pkgs.runtimeShell} ${preflightScript}
+        diff -u expected events
+
+        : > events
+        ${pkgs.runtimeShell} ${homePreflightScript}
+        printf 'root\n' > expected-home
+        diff -u expected-home events
+
         jq -e '.schema == "nix-seal.deployment.v1" and (.targets | length) == 2' ${integrated.config.nixSeal.deploymentFile}
         # The host may already have a private cache. Test an absent cache inside
         # the sandbox so readiness diagnoses missing artifacts, not permissions.
         jq --arg cache "$TMPDIR/empty-cache" '.artifactCacheRoot = $cache' \
           ${configuration.config.nixSeal.activationSpecs.activation} > activation.json
-        if nix-seal readiness --spec "$PWD/activation.json" --json > report.json; then
+        if nix-seal readiness --spec "$PWD/activation.json" \
+          --deployment ${configuration.config.nixSeal.deploymentFile} \
+          --default-configuration --json > report.json; then
           echo "readiness accepted an unprepared system" >&2
           exit 1
         fi
-        jq -e '.ready == false and (.errors | length) == 0 and (.artifacts[0].missing | length) > 0' report.json
+        jq -e '.ready == false and (.errors | length) == 0 and (.artifacts[0].missing | length) > 0 and (.preparationCommand | contains("prepare --identity")) and (.preparationCommand | contains("--deployment") | not)' report.json
         touch "$out"
       '';
   public-template-values =

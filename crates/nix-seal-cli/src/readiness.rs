@@ -12,6 +12,14 @@ pub(super) struct Args {
     /// Generated activation specifications. Repeat to check every phase or target.
     #[arg(long, required = true)]
     pub spec: Vec<PathBuf>,
+
+    /// Deployment description to show in preparation recovery instructions.
+    #[arg(long)]
+    pub deployment: Option<PathBuf>,
+
+    /// The deployment is the flake's saved default; prefer stable recovery instructions.
+    #[arg(long, requires = "deployment")]
+    pub default_configuration: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -60,9 +68,32 @@ impl Report {
                     .join("; ")
             );
         }
-        message.push_str("\nPrepare this configuration with nix-seal prepare on the administrator machine, install its signed ciphertext, then retry the switch. Keep earlier cache generations for rollback.");
         message
     }
+}
+
+fn preparation_command(deployment: Option<&Path>, default_configuration: bool) -> String {
+    let executable = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("nix-seal"));
+    let executable = super::preparation::shell_quote(&executable.to_string_lossy());
+    match (deployment, default_configuration) {
+        (Some(path), false) => format!(
+            "{executable} prepare --deployment {} --identity /path/to/admin.agekey --signing-key /path/to/release.key",
+            super::preparation::shell_quote(&path.to_string_lossy())
+        ),
+        (_, true) => format!(
+            "{executable} prepare --identity /path/to/admin.agekey --signing-key /path/to/release.key"
+        ),
+        (None, false) => format!(
+            "{executable} prepare --flake '.#<configuration>' --identity /path/to/admin.agekey --signing-key /path/to/release.key"
+        ),
+    }
+}
+
+fn preparation_message(deployment: Option<&Path>, default_configuration: bool) -> String {
+    format!(
+        "Prepare the artifacts required by this configuration from its flake checkout:\n  {}\nReplace the key paths and review the dry run, then repeat with --execute. If the keys are on another machine, add --administrator-host <host>. Retry the switch after preparation passes; earlier cache generations remain available for rollback.",
+        preparation_command(deployment, default_configuration)
+    )
 }
 
 pub(super) struct Inspection {
@@ -142,11 +173,13 @@ pub(super) fn run(arguments: &Args, json: bool) -> Result<()> {
         }
     }
     let ready = errors.is_empty() && reports.iter().all(Report::is_ready);
+    let artifacts_missing = reports.iter().any(|report| !report.is_ready());
     if json {
         println!(
             "{}",
             serde_json::json!({"schema":"nix-seal.readiness.v1", "ready":ready,
-            "artifacts":reports, "errors":errors})
+            "artifacts":reports, "errors":errors,
+            "preparationCommand": artifacts_missing.then(|| preparation_command(arguments.deployment.as_deref(), arguments.default_configuration))})
         );
     } else {
         for report in &reports {
@@ -161,6 +194,15 @@ pub(super) fn run(arguments: &Args, json: bool) -> Result<()> {
         }
         for error in errors {
             eprintln!("{error}");
+        }
+        if artifacts_missing {
+            eprintln!(
+                "{}",
+                preparation_message(
+                    arguments.deployment.as_deref(),
+                    arguments.default_configuration
+                )
+            );
         }
     }
     if !ready {

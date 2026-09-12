@@ -5,6 +5,7 @@ use nix_seal_core::{ActivationPhase, Id, PlanV2};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
@@ -21,15 +22,11 @@ const PHASES: [ActivationPhase; 4] = [
 
 #[derive(clap::Args)]
 pub(super) struct Args {
-    /// Nix configuration selector, e.g. .#nixosConfigurations.workstation.
-    #[arg(
-        long,
-        required_unless_present = "deployment",
-        conflicts_with = "deployment"
-    )]
+    /// Flake reference, optionally with an explicit configuration selector.
+    #[arg(long, conflicts_with = "deployment")]
     flake: Option<String>,
     /// Generated nixSeal.deploymentFile, or a built system containing nix-seal-deployment.json.
-    #[arg(long, required_unless_present = "flake")]
+    #[arg(long)]
     deployment: Option<PathBuf>,
     /// Checkout containing the canonical ciphertext referenced by the plans.
     #[arg(long, default_value = ".")]
@@ -194,7 +191,11 @@ fn invoke(command: &mut Command, input: &[u8]) -> Result<Vec<u8>> {
         let _ = sender.send(result);
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_mins(5);
-    let result = (|| {
+    let child = nix_seal_runtime::child::SupervisedChild::new(
+        child,
+        nix_seal_runtime::child::ChildTermination::Process,
+    )?;
+    (|| {
         let mut output = Vec::new();
         for _ in 0..2 {
             if let Some(bytes) = receiver
@@ -204,29 +205,122 @@ fn invoke(command: &mut Command, input: &[u8]) -> Result<Vec<u8>> {
                 output = bytes;
             }
         }
-        loop {
-            if let Some(status) = child.try_wait()? {
-                if !status.success() {
-                    bail!("preparation subprocess failed; target activation was not attempted");
-                }
-                return Ok(output);
-            }
-            if std::time::Instant::now() >= deadline {
-                bail!("preparation subprocess exceeded the five-minute deadline");
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
+        let status = child
+            .wait_until(deadline)?
+            .context("preparation subprocess exceeded the five-minute deadline")?;
+        if !status.success() {
+            bail!("preparation subprocess failed; target activation was not attempted");
         }
-    })();
-    if result.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-
-    result
+        Ok(output)
+    })()
 }
 
-fn shell_quote(value: &str) -> String {
+pub(super) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn nix_output(command: &mut Command, context: &str) -> Result<String> {
+    let output = command
+        .output()
+        .with_context(|| format!("could not run Nix to {context}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("could not {context}:\n{}", stderr.trim());
+    }
+    String::from_utf8(output.stdout).context("Nix returned non-UTF-8 output")
+}
+
+fn configuration_candidates(flake: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    for class in [
+        "nixosConfigurations",
+        "darwinConfigurations",
+        "homeConfigurations",
+    ] {
+        let output = Command::new("nix")
+            .args([
+                "eval",
+                "--json",
+                "--apply",
+                "value: builtins.attrNames value",
+                "--",
+            ])
+            .arg(format!("{flake}#{class}"))
+            .stderr(Stdio::null())
+            .output();
+        let Ok(output) = output else { continue };
+        if !output.status.success() {
+            continue;
+        }
+        let Ok(names) = serde_json::from_slice::<Vec<String>>(&output.stdout) else {
+            continue;
+        };
+        candidates.extend(names.into_iter().map(|name| format!("{class}.{name}")));
+    }
+    candidates
+}
+
+fn default_configuration_help(flake: &str, nix_error: Option<&str>) -> String {
+    let mut message = "this flake has no usable nix-seal default configuration. Add this to its flake-parts configuration:\n\n  flake.nixSeal.defaultConfiguration = \"nixosConfigurations.workstation\";".to_owned();
+    let candidates = configuration_candidates(flake);
+    if candidates.is_empty() {
+        if let Some(error) = nix_error.filter(|error| !error.trim().is_empty()) {
+            let _ = write!(message, "\n\nNix reported:\n{}", error.trim());
+        }
+    } else {
+        message.push_str("\n\nAvailable explicit commands:");
+        for candidate in candidates {
+            let _ = write!(
+                message,
+                "\n  nix-seal prepare --flake {} --identity /path/to/admin.agekey --signing-key /path/to/release.key",
+                shell_quote(&format!("{flake}#{candidate}"))
+            );
+        }
+    }
+    message
+}
+
+fn default_configuration(flake: &str) -> Result<String> {
+    let output = Command::new("nix")
+        .args(["eval", "--json", "--"])
+        .arg(format!("{flake}#nixSeal.defaultConfiguration"))
+        .stderr(Stdio::piped())
+        .output()
+        .context("could not run Nix to read the nix-seal default configuration")?;
+    if output.status.success() {
+        let selector: Option<String> = serde_json::from_slice(&output.stdout).map_err(|error| {
+            anyhow::anyhow!(
+                "{}\n\nnixSeal.defaultConfiguration must be a string: {error}",
+                default_configuration_help(flake, None)
+            )
+        })?;
+        return selector.ok_or_else(|| anyhow::anyhow!(default_configuration_help(flake, None)));
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    bail!(default_configuration_help(flake, Some(&stderr)))
+}
+
+fn saved_selector_installable(flake: &str, selector: &str) -> Result<String> {
+    let (class, name) = selector.split_once('.').with_context(|| {
+        format!(
+            "invalid nixSeal.defaultConfiguration {selector:?}; expected nixosConfigurations.<name>, darwinConfigurations.<name>, or homeConfigurations.<name>"
+        )
+    })?;
+    if !matches!(
+        class,
+        "nixosConfigurations" | "darwinConfigurations" | "homeConfigurations"
+    ) || name.is_empty()
+        || name.chars().any(char::is_control)
+    {
+        bail!(
+            "invalid nixSeal.defaultConfiguration {selector:?}; expected nixosConfigurations.<name>, darwinConfigurations.<name>, or homeConfigurations.<name>"
+        );
+    }
+    let quoted_name = serde_json::to_string(name)?;
+    Ok(format!(
+        "{flake}#{class}.{quoted_name}.config.nixSeal.deploymentFile"
+    ))
 }
 
 fn resolve_deployment(arguments: &Args) -> Result<PathBuf> {
@@ -237,23 +331,40 @@ fn resolve_deployment(arguments: &Args) -> Result<PathBuf> {
             path.clone()
         });
     }
-    let selector = arguments
-        .flake
-        .as_ref()
-        .context("missing configuration selector")?;
-    if !selector.contains('#') {
-        bail!("select a configuration, for example --flake .#nixosConfigurations.workstation");
-    }
-    let output = Command::new("nix")
-        .args(["build", "--no-link", "--print-out-paths", "--"])
-        .arg(format!("{selector}.config.nixSeal.deploymentFile"))
-        .stderr(Stdio::inherit())
-        .output()
-        .context("could not evaluate the deployment description with Nix")?;
-    if !output.status.success() {
-        bail!("could not build nixSeal.deploymentFile for the selected configuration");
-    }
-    let path = String::from_utf8(output.stdout)?;
+    let requested_flake = arguments.flake.as_deref().unwrap_or(".");
+    let (flake, has_explicit_configuration) = requested_flake
+        .split_once('#')
+        .map_or((requested_flake, false), |(reference, fragment)| {
+            (reference, !fragment.is_empty())
+        });
+    let flake = if flake.is_empty() { "." } else { flake };
+    let installable = if has_explicit_configuration {
+        format!("{requested_flake}.config.nixSeal.deploymentFile")
+    } else {
+        let selector = default_configuration(flake)?;
+        saved_selector_installable(flake, &selector).map_err(|error| {
+            anyhow::anyhow!(
+                "{}\n\nConfigured default is invalid: {error:#}",
+                default_configuration_help(flake, None)
+            )
+        })?
+    };
+    let path = nix_output(
+        Command::new("nix")
+            .args(["build", "--no-link", "--print-out-paths", "--"])
+            .arg(installable),
+        "build nixSeal.deploymentFile for the selected configuration",
+    )
+    .map_err(|error| {
+        if has_explicit_configuration {
+            error
+        } else {
+            anyhow::anyhow!(
+                "{}\n\nConfigured default could not be built: {error:#}",
+                default_configuration_help(flake, None)
+            )
+        }
+    })?;
     let paths: Vec<_> = path.lines().collect();
     if paths.len() != 1 || !Path::new(paths[0]).is_absolute() {
         bail!("Nix did not return one deployment description");

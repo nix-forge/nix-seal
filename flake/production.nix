@@ -123,6 +123,7 @@ in
       checks = {
         nix-seal = nixSeal;
         inherit documentation;
+        store-scan = import ../nix/tests/store-scan.nix { inherit pkgs; };
         bootstrap-terminal =
           pkgs.runCommand "nix-seal-bootstrap-terminal" { nativeBuildInputs = [ pkgs.python3 ]; }
             ''

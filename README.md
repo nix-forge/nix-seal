@@ -5,6 +5,11 @@ nix-darwin, and Home Manager. It stores standard age ciphertext in Git, builds a
 strict deterministic public policy plan, and activates plaintext only in
 restricted runtime directories.
 
+**Pre-release:** nix-seal has not received the independent audit required for
+1.0 and is not ready for production secrets. Start with the
+[orientation guide](docs/start-here.md) to understand the workflow and choose a
+disposable example. The [roadmap](ROADMAP.md) records the remaining release gates.
+
 Start with the [Nix authoring guide](docs/nix-authoring.md) for native NixOS,
 nix-darwin, and Home Manager setup, short secret and template declarations,
 and first-time creation. The [storage guide](docs/storage-layout.md) explains
@@ -116,6 +121,7 @@ the adapter passes the catalog through its existing `extraSpecialArgs` channel.
 ```nix
 {
   flake.nixSeal = {
+    defaultConfiguration = "nixosConfigurations.workstation";
     administrators.ianhollow = {
       identities = {
         administrator = { kind = "administrator"; public = "age1..."; };
@@ -334,11 +340,13 @@ and plaintext never enter the plan or Nix store.
 
 ### Prepare a configuration before switching
 
-Run preparation from the target machine's checkout. Select the configuration;
-nix-seal discovers its system and embedded Home Manager plans and cache locations:
+Save the configuration normally prepared from this flake with
+`flake.nixSeal.defaultConfiguration`, as shown above. Then run preparation from
+the checkout; nix-seal discovers its system and embedded Home Manager plans and
+cache locations:
 
 ```console
-nix-seal prepare --flake .#nixosConfigurations.workstation \
+nix-seal prepare \
   --identity /private/admin.agekey --signing-key /private/release.key
 ```
 
@@ -352,7 +360,7 @@ When the keys are on another machine, add an SSH destination. The key paths then
 refer to files on that administrator machine:
 
 ```console
-nix-seal prepare --flake .#nixosConfigurations.workstation \
+nix-seal prepare \
   --administrator-host admin.example \
   --identity /private/admin.agekey --signing-key /private/release.key
 ```
@@ -367,11 +375,16 @@ cache prompts for sudo; the administrator key operation runs without elevation.
 The destination user accounts must already exist.
 
 Use `--repository-root` when running outside the checkout containing canonical
-ciphertext. `--deployment /path/to/built-system` prepares the exact plans included
-in an already built NixOS system; an explicit `nixSeal.deploymentFile` also works.
-For other configurations, select `.#darwinConfigurations.workstation` or
-`.#homeConfigurations.user` with `--flake`. Nix evaluates/builds only the public
-deployment description, not the host system closure.
+ciphertext. `--flake /path/to/flake` uses another flake's saved default; add a
+fragment such as `--flake '.#darwinConfigurations.workstation'` or
+`--flake '.#homeConfigurations.user'` for a one-off override. If no default is
+configured, nix-seal lists the public candidates, the persistent Nix setting,
+and copyable explicit commands without guessing from the current hostname or
+user. `--deployment /path/to/built-system` prepares the exact plans included in
+an already built NixOS system; an explicit `nixSeal.deploymentFile` also works.
+This is the rollback and non-default recovery interface, not the ordinary
+workflow. Nix evaluates/builds only the public deployment description, not the
+host system closure.
 
 Preparation reports whether artifacts were prepared and installed. It never
 runs activation. If installation fails, correct the reported permission or
@@ -653,10 +666,11 @@ another secret's requirement.
 
 `nix-seal readiness --spec /path/to/activation.json` checks installed artifacts
 without needing canonical sources or identities. Repeat `--spec` to check every
-phase for the invoking cache owner. Failures include all selected specifications;
-`--json` emits one report with `ready`, `artifacts`, and `errors`. Run the check as
-the cache owner. Unlike `doctor`, this command does not need an administrator
-checkout and is suitable for deployment checks.
+phase for the invoking cache owner. Generated activation checks also pass
+`--deployment`, so a failure prints the exact preparation command for the built
+configuration. With `--json`, the same command appears in `preparationCommand`.
+Run the check as the cache owner. Unlike `doctor`, this command does not need an
+administrator checkout and is suitable for deployment checks.
 
 Non-usage failures use stable exit categories: `1` operational, `3` policy, `4`
 cryptographic or approval verification, `5` cache/canonical-storage, and `6`

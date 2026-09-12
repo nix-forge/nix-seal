@@ -25,6 +25,7 @@ struct Fixture {
     repository: PathBuf,
     plan_path: PathBuf,
     signing_path: PathBuf,
+    target_identity_path: PathBuf,
     target: nix_seal_core::Id,
 }
 fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
@@ -35,7 +36,12 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
     let plan_path = temporary.path().join("plan.v2.json");
     let signing_path = temporary.path().join("release.signing-key");
 
-    let (_target_identity, target_recipient) = nix_seal_crypto::generate_x25519();
+    let (target_identity, target_recipient) = nix_seal_crypto::generate_x25519();
+    let target_identity_path = temporary.path().join("target.agekey");
+    write_private(
+        &target_identity_path,
+        target_identity.expose_secret().as_bytes(),
+    )?;
     let target_id = nix_seal_core::Id::parse("host.direct")?;
     let secret_id = nix_seal_core::Id::parse("application/token")?;
     let signer_id = nix_seal_core::Id::parse("signer.release")?;
@@ -108,15 +114,20 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
         repository,
         plan_path,
         signing_path,
+        target_identity_path,
         target: target_id,
     })
 }
 fn cli(fixture: &Fixture, args: &[&str]) -> Result<Output, std::io::Error> {
-    Command::new(env!("CARGO_BIN_EXE_nix-seal"))
+    cli_command(fixture, args).output()
+}
+fn cli_command(fixture: &Fixture, args: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_nix-seal"));
+    command
         .args(args)
         .env("XDG_CACHE_HOME", fixture.temporary.path().join("xdg-cache"))
-        .current_dir(&fixture.repository)
-        .output()
+        .current_dir(&fixture.repository);
+    command
 }
 fn successful(output: &Output) {
     assert!(
@@ -233,6 +244,139 @@ fn doctor_and_readiness_fail_before_preparation_and_pass_after_install() -> Test
             "--json",
         ],
     )?);
+    Ok(())
+}
+
+#[test]
+fn readiness_failure_prints_the_exact_preparation_command() -> TestResult {
+    let fixture = fixture()?;
+    let deployment = deployment(&fixture)?;
+    let spaced_deployment = fixture.temporary.path().join("deployment selected.json");
+    std::fs::rename(deployment, &spaced_deployment)?;
+    let spec = fixture.temporary.path().join("activation.json");
+
+    let output = cli(
+        &fixture,
+        &[
+            "readiness",
+            "--spec",
+            spec.to_str().ok_or("spec path")?,
+            "--deployment",
+            spaced_deployment.to_str().ok_or("deployment path")?,
+        ],
+    )?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains(&format!(
+        "'{}' prepare --deployment '{}' --identity /path/to/admin.agekey --signing-key /path/to/release.key",
+        env!("CARGO_BIN_EXE_nix-seal"),
+        spaced_deployment.display()
+    )));
+    assert!(stderr.contains("repeat with --execute"));
+    assert!(stderr.contains("add --administrator-host"));
+    Ok(())
+}
+
+#[test]
+fn readiness_for_saved_default_prints_the_stable_preparation_command() -> TestResult {
+    let fixture = fixture()?;
+    let deployment = deployment(&fixture)?;
+    let spec = fixture.temporary.path().join("activation.json");
+    let output = cli(
+        &fixture,
+        &[
+            "readiness",
+            "--spec",
+            spec.to_str().ok_or("spec path")?,
+            "--deployment",
+            deployment.to_str().ok_or("deployment path")?,
+            "--default-configuration",
+        ],
+    )?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains(&format!(
+        "'{}' prepare --identity /path/to/admin.agekey --signing-key /path/to/release.key",
+        env!("CARGO_BIN_EXE_nix-seal")
+    )));
+    assert!(!stderr.contains("prepare --deployment"));
+    Ok(())
+}
+
+#[test]
+fn preparation_uses_the_current_flakes_saved_default() -> TestResult {
+    let fixture = fixture()?;
+    let deployment = deployment(&fixture)?;
+    let bin = fixture.temporary.path().join("fake-nix-bin");
+    std::fs::create_dir(&bin)?;
+    let nix = bin.join("nix");
+    std::fs::write(
+        &nix,
+        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" >> \"$FAKE_NIX_LOG\"\ncase \"$1\" in\n  eval) printf '%s\\n' '\"nixosConfigurations.desktop\"' ;;\n  build) printf '%s\\n' \"$FAKE_DEPLOYMENT\" ;;\n  *) exit 2 ;;\nesac\n",
+    )?;
+    std::fs::set_permissions(&nix, std::fs::Permissions::from_mode(0o755))?;
+    let log = fixture.temporary.path().join("nix-arguments");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = cli_command(
+        &fixture,
+        &[
+            "prepare",
+            "--signing-key",
+            fixture.signing_path.to_str().ok_or("signing path")?,
+        ],
+    )
+    .env("PATH", path)
+    .env("FAKE_NIX_LOG", &log)
+    .env("FAKE_DEPLOYMENT", &deployment)
+    .output()?;
+
+    successful(&output);
+    let arguments = std::fs::read_to_string(log)?;
+    assert!(arguments.contains(".#nixSeal.defaultConfiguration"));
+    assert!(arguments.contains(".#nixosConfigurations.\"desktop\".config.nixSeal.deploymentFile"));
+    Ok(())
+}
+
+#[test]
+fn missing_default_lists_persistent_setup_and_explicit_candidates() -> TestResult {
+    let fixture = fixture()?;
+    let bin = fixture.temporary.path().join("fake-nix-bin");
+    std::fs::create_dir(&bin)?;
+    let nix = bin.join("nix");
+    std::fs::write(
+        &nix,
+        "#!/bin/sh\nset -eu\nlast=\nfor arg do last=$arg; done\ncase \"$last\" in\n  *#nixosConfigurations) printf '%s\\n' '[\"desktop\"]' ;;\n  *#nixSeal.defaultConfiguration) printf '%s\\n' 'null' ;;\n  *) exit 1 ;;\nesac\n",
+    )?;
+    std::fs::set_permissions(&nix, std::fs::Permissions::from_mode(0o755))?;
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = cli_command(
+        &fixture,
+        &[
+            "prepare",
+            "--signing-key",
+            fixture.signing_path.to_str().ok_or("signing path")?,
+        ],
+    )
+    .env("PATH", path)
+    .output()?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr
+            .contains("flake.nixSeal.defaultConfiguration = \"nixosConfigurations.workstation\";")
+    );
+    assert!(stderr.contains("nix-seal prepare --flake '.#nixosConfigurations.desktop'"));
     Ok(())
 }
 
@@ -379,5 +523,304 @@ fn batch_installation_routes_each_targets_artifacts_to_its_own_cache() -> TestRe
             target
         );
     }
+    Ok(())
+}
+
+/// The recovery drills use separate keys and generated values, never live credentials.
+struct RecoveryFixture {
+    base: Fixture,
+    administrator: PathBuf,
+    recovery: PathBuf,
+    deployment: PathBuf,
+    canary: [u8; 32],
+}
+
+impl RecoveryFixture {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let base = fixture()?;
+        let administrator = base.temporary.path().join("administrator.agekey");
+        let recovery = base.temporary.path().join("recovery.agekey");
+        let mut plan: nix_seal_core::PlanV2 =
+            serde_json::from_slice(&std::fs::read(&base.plan_path)?)?;
+        let mut administrators = Vec::new();
+        let mut recipients = Vec::new();
+        for (name, kind, path) in [
+            (
+                "administrator",
+                nix_seal_core::IdentityKind::Administrator,
+                &administrator,
+            ),
+            ("recovery", nix_seal_core::IdentityKind::Recovery, &recovery),
+        ] {
+            let (identity, recipient) = nix_seal_crypto::generate_x25519();
+            write_private(path, identity.expose_secret().as_bytes())?;
+            let id = nix_seal_core::Id::parse(name)?;
+            plan.identities.insert(
+                id.clone(),
+                nix_seal_core::Identity {
+                    kind,
+                    public: recipient.clone(),
+                },
+            );
+            administrators.push(id);
+            recipients.push(recipient);
+        }
+        let mut canary = [0; 32];
+        getrandom::fill(&mut canary)?;
+        let secret = plan.secrets.values_mut().next().ok_or("secret")?;
+        secret.delivery = nix_seal_core::DeliveryMode::Rekeyed;
+        secret.administrators = administrators;
+        uzers::get_user_by_uid(uzers::get_current_uid())
+            .ok_or("test user")?
+            .name()
+            .to_str()
+            .ok_or("username")?
+            .clone_into(&mut secret.runtime.owner);
+        uzers::get_group_by_gid(uzers::get_current_gid())
+            .ok_or("test group")?
+            .name()
+            .to_str()
+            .ok_or("group name")?
+            .clone_into(&mut secret.runtime.group);
+        let source = base.repository.join(&secret.source);
+        let mut ciphertext = std::fs::File::create(&source)?;
+        nix_seal_crypto::encrypt(canary.as_slice(), &mut ciphertext, &recipients)?;
+        ciphertext.sync_all()?;
+        secret.source_ciphertext_hash = format!(
+            "{:x}",
+            base16ct::HexDisplay(&sha2::Sha256::digest(std::fs::read(source)?))
+        );
+        nix_seal_policy::validate(&plan)?;
+        std::fs::write(&base.plan_path, nix_seal_policy::canonical_json(&plan)?)?;
+        let deployment = deployment(&base)?;
+        Ok(Self {
+            base,
+            administrator,
+            recovery,
+            deployment,
+            canary,
+        })
+    }
+
+    fn run(&self, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
+        let output = cli(&self.base, args)?;
+        for bytes in [&output.stdout, &output.stderr] {
+            // Do not include private bytes in a failed assertion's diagnostic.
+            assert!(
+                !bytes
+                    .windows(self.canary.len())
+                    .any(|part| part == self.canary)
+            );
+        }
+        Ok(output)
+    }
+
+    fn prepare(
+        &self,
+        identity: &std::path::Path,
+        signer: &std::path::Path,
+        execute: bool,
+    ) -> Result<Output, Box<dyn std::error::Error>> {
+        let mut args = vec![
+            "prepare",
+            "--deployment",
+            self.deployment.to_str().ok_or("deployment path")?,
+            "--identity",
+            identity.to_str().ok_or("identity path")?,
+            "--signing-key",
+            signer.to_str().ok_or("signer path")?,
+            "--json",
+        ];
+        if execute {
+            args.push("--execute");
+        }
+        self.run(&args)
+    }
+
+    fn activate(&self) -> Result<Output, Box<dyn std::error::Error>> {
+        self.run(&[
+            "activate",
+            "--spec",
+            self.base
+                .temporary
+                .path()
+                .join("activation.json")
+                .to_str()
+                .ok_or("spec path")?,
+            "--identity",
+            self.base
+                .target_identity_path
+                .to_str()
+                .ok_or("target identity path")?,
+            "--json",
+        ])
+    }
+
+    fn assert_ready(&self, ready: bool) -> TestResult {
+        let output = self.run(&[
+            "readiness",
+            "--spec",
+            self.base
+                .temporary
+                .path()
+                .join("activation.json")
+                .to_str()
+                .ok_or("spec path")?,
+            "--json",
+        ])?;
+        assert_eq!(output.status.success(), ready);
+        let report: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(report["ready"], ready);
+        assert_eq!(report["artifacts"][0]["required"], 1);
+        assert_eq!(report["artifacts"][0]["verified"], usize::from(ready));
+        Ok(())
+    }
+
+    fn assert_value(&self) -> TestResult {
+        let value = std::fs::read(
+            self.base
+                .temporary
+                .path()
+                .join("runtime/current/application/token"),
+        )?;
+        if value != self.canary {
+            return Err("recovery changed the secret value".into());
+        }
+        Ok(())
+    }
+
+    fn lose_caches_and_runtime(&self) -> TestResult {
+        for name in ["installed", "xdg-cache", "runtime"] {
+            let path = self.base.temporary.path().join(name);
+            if path.exists() {
+                std::fs::remove_dir_all(path)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn recovery_drill_restores_cache_backup_then_rebuilds_from_recovery_identity() -> TestResult {
+    let fixture = RecoveryFixture::new()?;
+    let root = fixture.base.temporary.path();
+    let installed = root.join("installed");
+    let backup = root.join("offline-cache");
+    let canonical = std::fs::read(fixture.base.repository.join("secrets/token.age"))?;
+    successful(&fixture.prepare(&fixture.administrator, &fixture.base.signing_path, true)?);
+    successful(&fixture.activate()?);
+    fixture.assert_value()?;
+    successful(&fixture.run(&[
+        "cache",
+        "export",
+        "--root",
+        installed.to_str().ok_or("cache path")?,
+        "--destination",
+        backup.to_str().ok_or("backup path")?,
+        "--json",
+    ])?);
+
+    // A surviving target key and ciphertext backup suffice for restoration.
+    // Remove authoring keys as well as both caches so no implicit fallback works.
+    let offline_signer = root.join("offline-release.key");
+    std::fs::rename(&fixture.base.signing_path, &offline_signer)?;
+    std::fs::remove_file(&fixture.administrator)?;
+    fixture.lose_caches_and_runtime()?;
+    fixture.assert_ready(false)?;
+    successful(&fixture.run(&[
+        "cache",
+        "import",
+        "--root",
+        installed.to_str().ok_or("cache path")?,
+        "--source",
+        backup.to_str().ok_or("backup path")?,
+        "--json",
+    ])?);
+    fixture.assert_ready(true)?;
+    successful(&fixture.activate()?);
+    fixture.assert_value()?;
+
+    // With no artifact backup, reconstruct from the canonical repository and
+    // the independent recovery key. A dry run must not make the target ready.
+    fixture.lose_caches_and_runtime()?;
+    std::fs::remove_dir_all(&backup)?;
+    fixture.assert_ready(false)?;
+    successful(&fixture.prepare(&fixture.recovery, &offline_signer, false)?);
+    fixture.assert_ready(false)?;
+    assert!(!root.join("runtime").exists());
+    let prepared = fixture.prepare(&fixture.recovery, &offline_signer, true)?;
+    successful(&prepared);
+    let report: Value = serde_json::from_slice(&prepared.stdout)?;
+    assert_eq!(report["created"], 1);
+    assert_eq!(report["activated"], false);
+    assert!(!root.join("runtime").exists());
+    fixture.assert_ready(true)?;
+    successful(&fixture.activate()?);
+    fixture.assert_value()?;
+    assert_eq!(
+        sha2::Sha256::digest(std::fs::read(
+            fixture.base.repository.join("secrets/token.age")
+        )?),
+        sha2::Sha256::digest(canonical)
+    );
+    Ok(())
+}
+
+#[test]
+fn recovery_drill_signer_rotation_rejects_stale_artifacts_and_preserves_rollback() -> TestResult {
+    let fixture = RecoveryFixture::new()?;
+    let root = fixture.base.temporary.path();
+    successful(&fixture.prepare(&fixture.administrator, &fixture.base.signing_path, true)?);
+    successful(&fixture.activate()?);
+    let old_plan = std::fs::read(&fixture.base.plan_path)?;
+    let current = root.join("runtime/current");
+    let old_generation = std::fs::read_link(&current)?;
+
+    let replacement = nix_seal_manifest::ApprovalSigningKey::generate()?;
+    let replacement_path = root.join("replacement-release.key");
+    write_private(&replacement_path, replacement.encode_private()?.as_bytes())?;
+    let mut plan: nix_seal_core::PlanV2 = serde_json::from_slice(&old_plan)?;
+    plan.identities
+        .get_mut(&nix_seal_core::Id::parse("signer.release")?)
+        .ok_or("signer")?
+        .public = replacement.encode_public()?;
+    nix_seal_policy::validate(&plan)?;
+    std::fs::write(
+        &fixture.base.plan_path,
+        nix_seal_policy::canonical_json(&plan)?,
+    )?;
+
+    fixture.assert_ready(false)?;
+    assert!(!fixture.activate()?.status.success());
+    assert!(
+        !fixture
+            .prepare(&fixture.recovery, &fixture.base.signing_path, true)?
+            .status
+            .success()
+    );
+    assert_eq!(std::fs::read_link(&current)?, old_generation);
+    fixture.assert_value()?;
+    fixture.assert_ready(false)?;
+
+    successful(&fixture.prepare(&fixture.recovery, &replacement_path, true)?);
+    fixture.assert_ready(true)?;
+    successful(&fixture.activate()?);
+    fixture.assert_value()?;
+    // A signer change reauthorizes the same value; it need not create another
+    // plaintext generation when the materialized files have not changed.
+    assert_eq!(
+        nix_seal_cache::Cache::open(root.join("installed"))?
+            .artifact_records()?
+            .len(),
+        2
+    );
+
+    // This is a planned rotation, not a compromised-signer recovery. Rollback
+    // explicitly restores the previous approved plan and its trust policy.
+    std::fs::write(&fixture.base.plan_path, old_plan)?;
+    fixture.assert_ready(true)?;
+    successful(&fixture.activate()?);
+    fixture.assert_value()?;
+    successful(&fixture.activate()?);
     Ok(())
 }

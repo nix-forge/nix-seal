@@ -1,7 +1,11 @@
 self:
-{ config, lib, ... }:
+args@{ config, lib, ... }:
 let
   cfg = config.nixSeal;
+  configName = args.configName or null;
+  nixSealDefaultConfiguration = args.nixSealDefaultConfiguration or null;
+  isDefaultConfiguration =
+    configName != null && nixSealDefaultConfiguration == "darwinConfigurations.${configName}";
   embeddedHomeManagerUsers =
     if builtins.hasAttr "home-manager" config then
       builtins.attrNames (config."home-manager".users or { })
@@ -181,6 +185,11 @@ in
                     "--spec"
                     (toString spec)
                   ]) destination.specs
+                  ++ [
+                    "--deployment"
+                    (toString cfg.deploymentFile)
+                  ]
+                  ++ lib.optionals isDefaultConfiguration [ "--default-configuration" ]
                 );
               in
               lib.optionalString (destination.specs != [ ]) ''
@@ -191,9 +200,7 @@ in
             readiness_failed=0
             ${lib.concatMapStringsSep "\n" check cfg.deploymentTargets}
             if [ "$readiness_failed" -ne 0 ]; then
-              echo "nix-seal: prepare this configuration before retrying activation; nix-seal runtime preparation has not run." >&2
-              echo "nix-seal: use '${lib.getExe cfg.package} prepare --deployment ${cfg.deploymentFile} --identity /path/to/admin.agekey --signing-key /path/to/release.key'." >&2
-              echo "nix-seal: replace the key paths, review the dry run, then repeat with --execute. Add --administrator-host when the keys are remote." >&2
+              echo "nix-seal: preparation is required before retrying activation; nix-seal runtime preparation has not run." >&2
               exit 1
             fi
           ''

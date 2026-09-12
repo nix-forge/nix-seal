@@ -9,10 +9,18 @@ the same artifact selection and verification as activation. NixOS runs it throug
 `system.preSwitchChecks` for system and embedded home targets, under each cache
 owner. Home Manager checks before its write boundary. Activation repeats the
 verification because readiness cannot reserve cache state or prevent expiry.
+Generated checks pass the public deployment description and whether it came from
+the flake's saved default to readiness. A default failure prints the stable bare
+preparation command; a previous or explicitly selected generation prints a
+shell-quoted exact-built recovery command. JSON reports expose the same command
+to deployment wrappers.
 
 The modules expose a public deployment description containing target IDs, plans,
-activation specifications, cache destinations, and cache owners. `prepare`
-discovers that description from a configuration selector. It validates a complete
+activation specifications, cache destinations, and cache owners. A project may
+save `flake.nixSeal.defaultConfiguration`; bare `prepare` uses the current flake's
+saved selector, while `--flake <ref>#<configuration>` remains an override and
+`--deployment` remains exact-built recovery. No hostname, username, or sole
+candidate is selected implicitly. `prepare` validates a complete
 batch before creating artifacts, reuses matching verified artifacts, and imports
 ciphertext under each destination owner. Preparation and installation do not
 activate a configuration. Interrupted installation can be retried without deleting

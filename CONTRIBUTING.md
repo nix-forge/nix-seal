@@ -56,3 +56,16 @@ required x86 Linux Nix job. `ciChecks` contains every remaining native check,
 computed from `checks` rather than a separate allowlist. All three platforms
 build those checks through the shared CI action and validate flake output
 schemas. Ordinary `nix flake check` still builds the complete local check set.
+
+## Test evidence
+
+Generated activation and readiness checks must execute their shell control flow
+with isolated command adapters. Source-string assertions cannot prove that a
+failed readiness probe prevents switching. The deployment-readiness check tests
+system failure, home failure, and success before exercising the real CLI.
+
+The runtime VM's store scan rejects matches in text and binary regular files,
+including large match sets, and treats traversal or read errors as failures.
+`nix build .#checks.x86_64-linux.store-scan` exercises the scanner using temporary
+random candidates, without building or activating the system. Run the
+`runtime-vm` check to validate its integration with real secret activation.

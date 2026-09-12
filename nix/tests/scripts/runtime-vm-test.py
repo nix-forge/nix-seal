@@ -164,11 +164,7 @@ machine.succeed(
   # Nix store paths may contain dangling symlinks after GC. Restrict the scan
   # to regular files rather than treating an unreadable dangling target as a
   # plaintext-leak failure.
-  if find /nix/store -type f \
-    -exec grep -l --binary-files=without-match -F -f /run/nix-seal/current/app/token {} + \
-    2>/dev/null | grep -q .; then
-    exit 1
-  fi
+  assert-no-store-secret /nix/store /run/nix-seal/current/app/token
 
   # A tampered artifact must fail before a generation switch and preserve the
   # working secret/template pair from the prior generation.

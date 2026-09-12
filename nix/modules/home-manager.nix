@@ -1,5 +1,5 @@
 self:
-{
+args@{
   config,
   lib,
   osConfig ? null,
@@ -8,6 +8,19 @@ self:
 }:
 let
   cfg = config.nixSeal;
+  configName = args.configName or null;
+  nixSealDefaultConfiguration = args.nixSealDefaultConfiguration or null;
+  configurationSelector =
+    if configName == null then
+      null
+    else if osConfig != null then
+      "${
+        if pkgs.stdenv.hostPlatform.isDarwin then "darwinConfigurations" else "nixosConfigurations"
+      }.${configName}"
+    else
+      "homeConfigurations.${configName}";
+  isDefaultConfiguration =
+    configurationSelector != null && nixSealDefaultConfiguration == configurationSelector;
   inherit (import ./support.nix { inherit lib pkgs; }) groupCredentials escapeSystemdExecArgs;
   integratedLinux =
     pkgs.stdenv.hostPlatform.isLinux && osConfig != null && (osConfig.nixSeal.enable or false);
@@ -159,6 +172,11 @@ in
               "--spec"
               (toString spec)
             ]) (builtins.attrValues cfg.activationSpecs)
+            ++ [
+              "--deployment"
+              (toString cfg.deploymentFile)
+            ]
+            ++ lib.optionals isDefaultConfiguration [ "--default-configuration" ]
           )
         );
       })
