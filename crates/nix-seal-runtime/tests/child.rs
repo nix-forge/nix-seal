@@ -202,6 +202,11 @@ fn ignored_sigchld_reports_lost_ownership() -> TestResult {
     // accept the trap without installing the disposition, which leaves the
     // child waitable. Both Linux and Darwin auto-reap the children of a
     // process that ignores SIGCHLD.
+    // Skip the probe if python3 is not available (e.g., in the Nix build sandbox).
+    if Command::new("python3").arg("--version").status().is_err() {
+        eprintln!("skipping ignored_sigchld_reports_lost_ownership: python3 not found");
+        return Ok(());
+    }
     let status = Command::new("python3")
         .args([
             "-c",
