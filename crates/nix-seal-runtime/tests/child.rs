@@ -173,6 +173,9 @@ fn rejects_a_child_reaped_outside_the_owner() -> TestResult {
 fn ignored_sigchld_reports_lost_ownership() -> TestResult {
     const PROBE: &str = "NIX_SEAL_TEST_IGNORED_SIGCHLD";
     if std::env::var_os(PROBE).is_some() {
+        // The parent launches this probe with SIGCHLD already ignored (see
+        // below), so the kernel reaps the supervised child automatically and
+        // the owner must report lost ownership instead of a status.
         let mut child = Command::new("sh")
             .args(["-c", "read line"])
             .stdin(Stdio::piped())
@@ -191,8 +194,21 @@ fn ignored_sigchld_reports_lost_ownership() -> TestResult {
         child.terminate();
         return Ok(());
     }
-    let status = Command::new("sh")
-        .args(["-c", "trap '' CHLD; exec \"$@\"", "sh"])
+    // Re-execute into an isolated probe process: the ignored disposition is
+    // process-wide and must not leak into concurrently running tests. The
+    // disposition is installed with Python's signal module because the
+    // workspace forbids unsafe code (ruling out a libc/call-site FFI helper)
+    // and a shell `trap '' CHLD` is not portable: dash and macOS bash 3.2
+    // accept the trap without installing the disposition, which leaves the
+    // child waitable. Both Linux and Darwin auto-reap the children of a
+    // process that ignores SIGCHLD.
+    let status = Command::new("python3")
+        .args([
+            "-c",
+            "import os, signal, sys; \
+            signal.signal(signal.SIGCHLD, signal.SIG_IGN); \
+            os.execv(sys.argv[1], sys.argv[1:])",
+        ])
         .arg(std::env::current_exe()?)
         .args(["--exact", "ignored_sigchld_reports_lost_ownership"])
         .env(PROBE, "1")
