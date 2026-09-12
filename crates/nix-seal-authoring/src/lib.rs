@@ -2397,10 +2397,17 @@ mod tests {
             &identity,
             WriteMode::Replace,
         )?;
-        let expected: [&[u8]; 2] = [b"first-replaced", b"second-replaced"];
-        for (result, expected) in replacement.iter().zip(expected) {
+        assert_eq!(replacement.len(), 2);
+        for (destination, expected) in [
+            ("secrets/one.age", b"first-replaced".as_slice()),
+            ("secrets/two.age", b"second-replaced".as_slice()),
+        ] {
             let mut plaintext = Vec::new();
-            nix_seal_crypto::decrypt(File::open(&result.path)?, &mut plaintext, &identity)?;
+            nix_seal_crypto::decrypt(
+                File::open(root.join(destination))?,
+                &mut plaintext,
+                &identity,
+            )?;
             assert_eq!(plaintext, expected);
         }
         Ok(())

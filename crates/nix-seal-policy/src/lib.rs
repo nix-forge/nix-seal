@@ -1656,10 +1656,9 @@ mod tests {
     const SIGNER: &str = "nix-seal-ed25519-v1:EcFcZVkcYsuXdMDG2JyOsyuoCExdGk0yUwLVriY0Vyw=";
     const SSH_SIGNER: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILM+rvN+ot98qgEN796jTiQfZfG1KaT0PtFDJ/XFSqti release@example.com";
     #[test]
-    fn empty_plan_is_stable_and_valid() -> Result<(), PolicyError> {
+    fn empty_plan_is_valid() -> Result<(), PolicyError> {
         let plan = PlanV2::default();
         validate(&plan)?;
-        assert_eq!(plan_hash(&plan)?, plan_hash(&plan)?);
         Ok(())
     }
 
@@ -1967,7 +1966,15 @@ mod tests {
         assert!(validate(&identity_group).is_err());
 
         let mut group_target = PlanV2::default();
-        group_target.groups.insert(id.clone(), Group::default());
+        let target_key =
+            Id::parse("target-key").map_err(|error| PolicyError::Violation(error.to_string()))?;
+        group_target.identities.insert(
+            target_key.clone(),
+            Identity {
+                kind: IdentityKind::Target,
+                public: RECIPIENT.to_owned(),
+            },
+        );
         group_target.targets.insert(
             id.clone(),
             Target {
@@ -1982,28 +1989,18 @@ mod tests {
                 service_actions: None,
             },
         );
+        validate(&group_target)?;
+        group_target.groups.insert(id.clone(), Group::default());
         assert!(validate(&group_target).is_err());
 
-        let mut identity_target = PlanV2::default();
+        let mut identity_target = group_target;
+        identity_target.groups.clear();
+        validate(&identity_target)?;
         identity_target.identities.insert(
             id.clone(),
             Identity {
                 kind: IdentityKind::Target,
                 public: RECIPIENT.to_owned(),
-            },
-        );
-        identity_target.targets.insert(
-            id,
-            Target {
-                kind: TargetKind::NixOs,
-                system: "x86_64-linux".to_owned(),
-                identity: Id::parse("target-key")
-                    .map_err(|error| PolicyError::Violation(error.to_string()))?,
-                username: None,
-                configuration: None,
-                environment: None,
-                tags: Vec::new(),
-                service_actions: None,
             },
         );
         assert!(validate(&identity_target).is_err());
@@ -2022,8 +2019,10 @@ mod tests {
                 kind: IdentityKind::Administrator,
                 public: RECIPIENT.to_owned(),
             };
-            forward.identities.insert(id.clone(), identity.clone());
-            reverse.identities.insert(id, identity);
+            forward.identities.insert(id, identity);
+        }
+        for (id, identity) in forward.identities.iter().rev() {
+            reverse.identities.insert(id.clone(), identity.clone());
         }
         // BTreeMap canonicalization is an explicit IR invariant, not an
         // implementation detail: callers may construct plans in any order.
@@ -2810,10 +2809,6 @@ mod tests {
             .approval;
         assert_eq!(approval.threshold, 1);
         assert_eq!(approval.signers.get(&signer_id), Some(&SIGNER.to_owned()));
-        assert_eq!(
-            target_policy_hash(&projection)?,
-            target_policy_hash(&projection)?
-        );
         Ok(())
     }
 
