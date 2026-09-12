@@ -1008,7 +1008,7 @@ in
           targets = cfg.deploymentTargets;
         }
       );
-      description = "Public preparation description for the system and its embedded Home Manager targets. Use nix-seal prepare --flake with the configuration selector; private key paths are supplied only to that command.";
+      description = "Public preparation description for the system and its embedded Home Manager targets. Bare nix-seal prepare uses the flake's saved default; private key paths are supplied only to that command.";
     };
     activationSpec = mkOption {
       type = types.path;

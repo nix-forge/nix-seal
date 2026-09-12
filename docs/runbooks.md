@@ -1,5 +1,36 @@
 # Security and recovery runbooks
 
+## Repeatable recovery drills
+
+Run the recovery scenarios through the compiled CLI before a release:
+
+```console
+cargo test --locked -p nix-seal --test preparation recovery_drill
+```
+
+The tests generate separate administrator, recovery, target, and signing keys
+and a random secret inside private temporary directories. They exercise:
+
+- Restoring an exported ciphertext cache after losing both working caches and
+  runtime state, with the administrator key removed and the signing key moved
+  away from its original path. The target identity decrypts the restored value.
+- Reconstructing artifacts from the unchanged canonical ciphertext with the
+  separate recovery identity after also losing the exported cache. A dry run
+  leaves readiness false; executed preparation restores readiness without
+  activating, then explicit CLI activation restores the value.
+- Rotating a signer in the plan while old artifacts remain cached. Readiness,
+  activation, and preparation with the old signer fail; the current runtime
+  value survives. Preparation with the replacement signer restores readiness.
+  The drill then explicitly restores the old approved plan to check rollback.
+  Re-trusting an old signer is appropriate only for a planned rotation, never
+  for a compromised signer.
+
+These are unprivileged CLI integration tests using isolated persistent runtime
+directories. They do not mount the platform's volatile storage, restore an
+actual offline identity backup, run a service, or replace the independent audit.
+Record native platform and operational recovery results separately. The runtime
+VM and platform checks remain necessary for boot and service integration.
+
 ## First-time canonical ciphertext creation
 
 The module derives bootstrap state from the declared ciphertext source: an
@@ -142,23 +173,28 @@ does not change the credential used by the service.
 
 ## Cache loss, corruption, or binary-cache substitution
 
-For module-managed configurations, start with `nix-seal prepare --flake
-.#nixosConfigurations.workstation --identity /private/admin.agekey --signing-key
+For module-managed configurations with `flake.nixSeal.defaultConfiguration`,
+start with `nix-seal prepare --identity /private/admin.agekey --signing-key
 /private/release.key`. Add `--administrator-host admin.example` when those paths
-are on an administrator machine. Review the dry run and repeat with `--execute`.
+are on an administrator machine. Use `--flake
+'.#nixosConfigurations.workstation'` only for a one-off override. Review the dry
+run and repeat with `--execute`.
+
 The command discovers system and home targets, installs signed ciphertext as each
 cache owner, and verifies readiness. Retry the normal switch afterward. For a
 failed switch into an already built NixOS system, use `--deployment` with that
 system path to prepare its exact plans. Existing cache generations are retained.
 
-On nix-darwin, use `--flake .#darwinConfigurations.workstation`. Activation checks
+On nix-darwin, save `darwinConfigurations.workstation` as the project default or
+use `--flake '.#darwinConfigurations.workstation'` explicitly. Activation checks
 both system and embedded home caches before preparing the nix-seal runtime. If it
 reports candidates for a different plan, prepare artifacts for the new configuration
-even if the secret values have not changed. The error includes a `--deployment`
-command for the exact activation plans. Use the executable shown there when your
-installed CLI is older and lacks `prepare`. Embedded home accounts must exist so
-the preflight can read each private cache as its owner. On a first installation,
-create those accounts before preparing and activating their home secrets.
+even if the secret values have not changed. A default-generation error shows the
+stable bare command; other generations include exact `--deployment` recovery.
+Use the executable shown there when your installed CLI is older and lacks
+`prepare`. Embedded home accounts must exist so the preflight can read each
+private cache as its owner. On a first installation, create those accounts before
+preparing and activating their home secrets.
 
 For individual plans or manual approval workflows:
 
@@ -237,3 +273,12 @@ validation during the real deployment.
 These runbooks are operational guidance, not a guarantee of secure deletion or
 host integrity. A compromised kernel, root account, administrator workstation,
 or external service still requires the corresponding platform incident process.
+
+## Subprocess deadlines
+
+Service-manager actions, generators, external migration helpers, and deployment
+preparation block while waiting for child exit. They retain their configured
+timeouts and failure reporting. A helper that closes its output but keeps running
+still must exit before the deadline. Cancellation terminates the same child or
+private process group used by that operation, and the child is reaped before its
+owner is released. See [ADR 0026](adr/0026-blocking-child-completion.md).

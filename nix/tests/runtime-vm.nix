@@ -33,6 +33,9 @@ pkgs.testers.nixosTest {
       pkgs.findutils
       pkgs.gnugrep
       pkgs.jq
+      (pkgs.writeShellScriptBin "assert-no-store-secret" (
+        builtins.readFile ./scripts/assert-no-store-secret.sh
+      ))
     ];
     systemd.services.nix-seal-argument-probe = {
       serviceConfig = {

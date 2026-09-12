@@ -50,11 +50,17 @@ Compile, inspect, validate, and diagnose public policy.
 .B readiness
 Check all required signed artifacts for one or more --spec activation documents.
 Requires no private keys or canonical source checkout. Exits nonzero if any
-selected target or phase is not ready.
+selected target or phase is not ready. Pass the generated public deployment
+description with \fB--deployment PATH\fR. Generated modules also mark whether it
+belongs to the flake's saved default, so text and JSON reports show the stable
+bare preparation command for that default and exact-built recovery otherwise.
 .TP
 .B prepare
-Discover a configuration's system and home plans using --flake, validate and
-prepare signed artifacts, and install them with --execute. Use
+Discover a configuration's system and home plans, validate and prepare signed
+artifacts, and install them with --execute. With no selector, read
+\fBnixSeal.defaultConfiguration\fR from the current flake. A fragment on
+\fB--flake\fR explicitly overrides the saved default; \fB--deployment\fR selects
+an exact built generation for recovery. Use
 --administrator-host for keys on another machine. Private-key paths are command
 options, never Nix settings. Preparation does not activate the configuration.
 .TP

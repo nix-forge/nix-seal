@@ -1,5 +1,5 @@
 self:
-{
+args@{
   config,
   lib,
   pkgs,
@@ -8,6 +8,10 @@ self:
 }:
 let
   cfg = config.nixSeal;
+  configName = args.configName or null;
+  nixSealDefaultConfiguration = args.nixSealDefaultConfiguration or null;
+  isDefaultConfiguration =
+    configName != null && nixSealDefaultConfiguration == "nixosConfigurations.${configName}";
   inherit (import ./support.nix { inherit lib pkgs; }) groupCredentials;
   embeddedHomeManagerUsers =
     if builtins.hasAttr "home-manager" config then
@@ -334,6 +338,11 @@ in
                   "--spec"
                   (toString spec)
                 ]) destination.specs
+                ++ [
+                  "--deployment"
+                  (toString cfg.deploymentFile)
+                ]
+                ++ lib.optionals isDefaultConfiguration [ "--default-configuration" ]
               );
             in
             lib.optionalString (destination.specs != [ ]) ''
@@ -344,8 +353,7 @@ in
           readiness_failed=0
           ${lib.concatMapStringsSep "\n" check cfg.deploymentTargets}
           if [ "$readiness_failed" -ne 0 ]; then
-            echo "nix-seal: prepare this configuration before switching; services have not been stopped." >&2
-            echo "nix-seal: use 'nix-seal prepare --deployment ${cfg.deploymentFile}' with your administrator key paths; add --administrator-host when the keys are remote." >&2
+            echo "nix-seal: preparation is required before switching; services have not been stopped." >&2
             exit 1
           fi
         ''
