@@ -170,6 +170,7 @@ fn rejects_a_child_reaped_outside_the_owner() -> TestResult {
 }
 
 #[test]
+#[cfg(not(target_vendor = "apple"))]
 fn ignored_sigchld_reports_lost_ownership() -> TestResult {
     const PROBE: &str = "NIX_SEAL_TEST_IGNORED_SIGCHLD";
     if std::env::var_os(PROBE).is_some() {
@@ -200,8 +201,8 @@ fn ignored_sigchld_reports_lost_ownership() -> TestResult {
     // workspace forbids unsafe code (ruling out a libc/call-site FFI helper)
     // and a shell `trap '' CHLD` is not portable: dash and macOS bash 3.2
     // accept the trap without installing the disposition, which leaves the
-    // child waitable. Both Linux and Darwin auto-reap the children of a
-    // process that ignores SIGCHLD.
+    // child waitable. Linux auto-reaps the children of a process that
+    // ignores SIGCHLD.
     // Skip the probe if python3 is not available (e.g., in the Nix build sandbox).
     if Command::new("python3").arg("--version").status().is_err() {
         eprintln!("skipping ignored_sigchld_reports_lost_ownership: python3 not found");
