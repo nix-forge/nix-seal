@@ -4,9 +4,8 @@ import argparse
 import os
 import re
 import subprocess
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 
 def toolchain(root: Path, *, msrv: bool = False) -> None:
@@ -34,7 +33,7 @@ def toolchain(root: Path, *, msrv: bool = False) -> None:
     for target in targets:
         command += ["--target", target]
     subprocess.run(command, check=True)
-    with Path(os.environ["GITHUB_ENV"]).open("a") as output:
+    with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as output:
         output.write(f"RUSTUP_TOOLCHAIN={channel}\n")
 
 

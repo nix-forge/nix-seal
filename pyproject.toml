@@ -1,33 +1,137 @@
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = [".github/tests"]
+python_files = ["test_*.py"]
+addopts = [
+  "--import-mode=importlib",
+  "--strict-config",
+  "--strict-markers",
+  "-ra",
+]
+xfail_strict = true
+
 [tool.ruff]
+fix = false
 preview = true
+target-version = "py314"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
-ignore = ["line-too-long"]
+preview = true
+future-annotations = true
+select = ["ALL"]
+ignore = [
+  # Ruff formatter owns these rules.
+  "tab-indentation",
+  "indentation-with-invalid-multiple",
+  "indentation-with-invalid-multiple-comment",
+  "over-indented",
+  "docstring-tab-indentation",
+  "triple-single-quotes",
+  "bad-quotes-inline-string",
+  "bad-quotes-multiline-string",
+  "bad-quotes-docstring",
+  "avoidable-escaped-quote",
+  "missing-trailing-comma",
+  "prohibited-trailing-comma",
+  "multi-line-implicit-string-concatenation",
+  "line-too-long",
+  "CPY",
+  "FBT",
+  "implicit-namespace-package",
+  "incorrect-blank-line-before-class",
+  "multi-line-summary-second-line",
+  # ty checks every helper and dynamically injected NixOS driver script. Type
+  # inference is more useful here than annotations on fixture callbacks.
+  "missing-type-function-argument",
+  "missing-type-args",
+  "missing-type-kwargs",
+  "missing-return-type-undocumented-public-function",
+  "missing-return-type-private-function",
+  "missing-return-type-special-method",
+  # These are internal CI/test helpers rather than a public Python API.
+  "undocumented-public-module",
+  "undocumented-public-class",
+  "undocumented-public-method",
+  "undocumented-public-function",
+  "undocumented-public-init",
+  # One-shot CI commands use direct exception messages as operator diagnostics.
+  "raw-string-in-exception",
+  "f-string-in-exception",
+  "raise-vanilla-args",
+]
+
+[tool.ruff.lint.flake8-bandit]
+check-typed-exception = true
+
+[tool.ruff.lint.flake8-builtins]
+strict-checking = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-type-checking]
+strict = true
 
 [tool.ruff.lint.per-file-ignores]
-# NixOS test scripts receive these names from the test driver at runtime.
-"nix/tests/scripts/runtime-vm-test.py" = ["undefined-name"]
+".github/tests/**/*.py" = [
+  # Retained unittest suites exercise fixed local commands and temporary Git
+  # trees; subprocess calls use argument lists without a shell.
+  "assert",
+  "pytest-unittest-assertion",
+  "pytest-unittest-raises-assertion",
+  "start-process-with-partial-path",
+  "subprocess-without-shell-equals-true",
+  "suspicious-subprocess-import",
+]
+".github/scripts/ci-rust.py" = [
+  # CI orchestration invokes fixed cargo/nix commands and prints job output.
+  "docstring-missing-returns",
+  "docstring-missing-exception",
+  "print",
+  "start-process-with-partial-path",
+  "subprocess-without-shell-equals-true",
+  "suspicious-subprocess-import",
+]
+"nix/tests/scripts/bootstrap-tty.py" = [
+  # The integration fixture intentionally asserts invariants, replaces its
+  # process with the tested CLI, and reports one final result to the Nix driver.
+  "assert",
+  "print",
+  "start-process-with-no-shell",
+  "subprocess-run-without-check",
+  "subprocess-without-shell-equals-true",
+  "suspicious-subprocess-import",
+]
+"nix/tests/scripts/runtime-vm-test.py" = [
+  # NixOS test scripts receive these names from the test driver at runtime.
+  "undefined-name",
+]
 
 [tool.ruff.format]
+docstring-code-format = true
 line-ending = "lf"
 preview = true
 
 [tool.ty.environment]
-python-version = "3.11"
+python-version = "3.14"
 python-platform = "all"
 
 [tool.ty.src]
-include = ["nix/tests/scripts/**/*.py", ".github/scripts/**/*.py"]
-exclude = ["**/__pycache__"]
+include = ["**/*.py", "**/*.pyi"]
+exclude = [
+  ".git",
+  ".direnv",
+  ".ruff_cache",
+  ".pytest_cache",
+  "**/__pycache__",
+  "result",
+]
 
 [[tool.ty.overrides]]
 include = ["nix/tests/scripts/runtime-vm-test.py"]
 
 [tool.ty.overrides.rules]
-# NixOS test scripts are executed with driver-provided globals. This project
-# contains only that dynamic test DSL, so unresolved references are not useful
-# type errors; the VM check validates the runtime contract itself.
+# The NixOS driver supplies and validates these globals at evaluation time.
 unresolved-reference = "ignore"
 
 [tool.ty.terminal]

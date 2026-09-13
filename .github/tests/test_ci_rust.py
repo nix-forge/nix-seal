@@ -11,6 +11,8 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location(
     "ci_rust", Path(__file__).parents[1] / "scripts/ci-rust.py"
 )
+if spec is None or spec.loader is None:
+    raise ImportError("Unable to load the CI Rust helper")
 ci_rust = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci_rust)
 

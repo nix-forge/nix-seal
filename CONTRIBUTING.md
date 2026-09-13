@@ -11,11 +11,13 @@ All commits require Developer Certificate of Origin sign-off:
 git commit -s
 ```
 
-Run `cargo fmt --check`,
-`cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace`, `cargo vet --locked`, and `nix flake check`. Never put
-real secrets, private identities, prompt answers, or plaintext test fixtures in
-commits or CI.
+Run `cargo fmt --all -- --check`,
+`cargo check --workspace --all-targets --all-features --locked`,
+`cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`,
+`cargo test --workspace --all-targets --all-features --locked`,
+`cargo deny --locked check`, `cargo vet --locked`, and `nix flake check`. Never
+put real secrets, private identities, prompt answers, or plaintext test fixtures
+in commits or CI.
 
 Security-critical code requires CODEOWNER review. Dependencies are reviewed one
 at a time; lockfile updates must explain security and compatibility impact.
@@ -24,6 +26,13 @@ a recorded bootstrap baseline, not an audit claim: reduce them only with a
 documented review or a trusted imported audit. Refresh imports deliberately and
 commit the resulting `supply-chain/imports.lock` change with the dependency
 update.
+
+For generated programs, use `writeShellApplication` with `runtimeInputs` for a
+short installed Bash command. Use `nix/lib/writers.nix` for checked Bash source
+templates, and `writers.writePython3Bin` for a single Python executable. Use
+`replaceVars` or `replaceVarsWith` for complete `@name@` file templates and
+`builtins.replaceStrings` only for small evaluation-time strings. Package-phase
+source edits must use `substituteInPlace --replace-fail`.
 
 ## Rust source boundaries
 
