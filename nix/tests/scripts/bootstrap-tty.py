@@ -111,7 +111,8 @@ with tempfile.TemporaryDirectory() as directory:
     plan["secrets"]["host/second/token"] = {**secret, "source": "secrets/second.age"}
     path.write_text(json.dumps(plan))
     denied = subprocess.run([CLI, *map(str, args)], input=b"", capture_output=True)
-    assert denied.returncode != 0 and b"ambiguous" in denied.stderr
+    assert denied.returncode != 0
+    assert b"ambiguous" in denied.stderr
     assert not (root / "secrets").exists()
     del plan["secrets"]["host/second/token"]
     path.write_text(json.dumps(plan))

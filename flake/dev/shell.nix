@@ -38,6 +38,7 @@ _: {
             pinact
             prettier
             prek
+            (python3.withPackages (ps: [ ps.pytest ]))
             rumdl
             rage
             rustc

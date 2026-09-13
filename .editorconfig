@@ -14,3 +14,8 @@ indent_size = 4
 [*.md]
 # Markdown list continuation indentation depends on the marker width.
 indent_size = unset
+
+[LICENSE-*]
+# License prose retains the canonical upstream indentation.
+indent_style = unset
+indent_size = unset

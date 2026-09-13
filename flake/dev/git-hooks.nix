@@ -53,7 +53,7 @@
             };
             cargo-check = {
               enable = true;
-              entry = "cargo check --workspace --all-targets";
+              entry = "cargo check --workspace --all-targets --all-features --locked";
               language = "system";
               always_run = true;
               pass_filenames = false;
@@ -63,7 +63,7 @@
             cargo-clippy = {
               enable = true;
               name = "cargo clippy";
-              entry = "cargo clippy --workspace --all-targets -- -D warnings";
+              entry = "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings";
               language = "system";
               extraPackages = [
                 pkgs.cargo
@@ -76,7 +76,7 @@
             };
             cargo-test = {
               enable = true;
-              entry = "cargo test --workspace";
+              entry = "cargo test --workspace --all-targets --all-features --locked";
               language = "system";
               extraPackages = [ pkgs.cargo ];
               always_run = true;
@@ -86,7 +86,7 @@
             };
             cargo-deny = {
               enable = true;
-              entry = "cargo deny check";
+              entry = "cargo deny --locked check";
               language = "system";
               extraPackages = [ pkgs.cargo-deny ];
               always_run = true;
@@ -157,10 +157,7 @@
             check-json.enable = true;
             check-toml.enable = true;
             check-yaml.enable = true;
-            editorconfig-checker = {
-              enable = true;
-              excludes = [ "^LICENSE-.*$" ];
-            };
+            editorconfig-checker.enable = true;
             typos = {
               enable = true;
               # The upstream hook's generated empty [default] table overrides configPath.
