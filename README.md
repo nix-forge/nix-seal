@@ -1,5 +1,7 @@
 # nix-seal
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14636/badge)](https://www.bestpractices.dev/en/projects/14636)
+
 `nix-seal` is a security-first, offline-first secret manager for NixOS,
 nix-darwin, and Home Manager. It stores standard age ciphertext in Git, builds a
 strict deterministic public policy plan, and activates plaintext only in
