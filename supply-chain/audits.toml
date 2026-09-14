@@ -97,6 +97,12 @@ criteria = "safe-to-deploy"
 delta = "1.1.4+spec-1.1.0 -> 1.1.5+spec-1.1.0"
 notes = "Reviewed the published crate archives against Cargo.lock checksums. The production delta makes integer and float Cow buffers owned in DeValue::make_owned, matching existing string handling, and fixes documentation links. No new unsafe code, build script, runtime dependencies, filesystem, process, or network capabilities. Upstream dev dependency and release metadata changes do not alter this workspace's resolved dependency graph."
 
+[[audits.toml]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.5+spec-1.1.0 -> 1.1.6+spec-1.1.0"
+notes = "Reviewed the published crate archives against Cargo.lock checksums. The production delta only removes two key clones in the document parser by moving the owned key after preserving its span for diagnostics. Parser behavior, dependencies, build behavior, unsafe code, and runtime capabilities are unchanged."
+
 [[audits.yaml_serde]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
