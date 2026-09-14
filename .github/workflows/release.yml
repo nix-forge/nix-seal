@@ -10,9 +10,6 @@ jobs:
   build:
     name: build
     timeout-minutes: 90
-    env:
-      TARGET_SYSTEM: ${{ matrix.system }}
-      ARTIFACT_NAME: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
