@@ -11,6 +11,19 @@ All commits require Developer Certificate of Origin sign-off:
 git commit -s
 ```
 
+## Testing and security gates
+
+Run the focused test for the behavior you changed, then the complete checks
+listed below before requesting review. CI runs these checks on pull requests
+and merge groups, and protected `main` requires the resulting statuses to
+pass.
+
+Every major behavior, security, interface, or migration change must add or
+update an automated regression test. If an automated test is not practical,
+the pull request must record the reason, the manual evidence, and a follow-up
+plan. Dependency and security findings are handled under the
+[dependency-management policy](docs/dependency-management.md).
+
 Run `cargo fmt --all -- --check`,
 `cargo check --workspace --all-targets --all-features --locked`,
 `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`,

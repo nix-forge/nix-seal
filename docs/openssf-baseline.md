@@ -47,9 +47,12 @@ test fixtures in commits or CI.
 ## Dependency and release controls
 
 Cargo.lock, flake inputs, and the cargo-vet policy are reviewed with each
-dependency change. Dependency review blocks new low-or-higher severity
-vulnerabilities. SCA and SAST findings must be fixed before release unless a
-reviewed suppression records why the finding is not exploitable.
+dependency change. The [dependency-management policy](dependency-management.md)
+and [secret-management policy](secret-management.md) define the SCA,
+remediation, storage, access, and rotation requirements. Dependency review
+blocks new low-or-higher severity vulnerabilities. SCA and SAST findings must
+be fixed before release unless a reviewed suppression records why the finding
+is not exploitable.
 
 The release workflow produces a unique tag, a change log entry, checksums, an
 SBOM, and an OIDC attestation. Release documentation explains the actor and

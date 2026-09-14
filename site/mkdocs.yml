@@ -39,4 +39,6 @@ nav:
   - Storage layout: storage-layout.md
   - Operations: runbooks.md
   - Benchmarks: benchmarks.md
+  - Dependency management: dependency-management.md
+  - Secret management: secret-management.md
   - Release process: release.md
