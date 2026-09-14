@@ -66,6 +66,11 @@ and coordinates a public advisory after users have a fixed version or a
 documented mitigation. [security/vex.json](../security/vex.json) records
 non-affectability statements. Pre-1.0 support follows [SUPPORT.md](../SUPPORT.md).
 
+The operating procedures for [dependency management](dependency-management.md)
+and [secret management](secret-management.md) are part of this policy. They
+define the review, release-gate, storage, access, and rotation requirements
+used to support the controls below.
+
 ## Control evidence
 
 | Control area | Evidence |
