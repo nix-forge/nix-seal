@@ -157,3 +157,13 @@ The operational procedures in [`docs/runbooks.md`](docs/runbooks.md) are part of
 the threat-model control set. They must be exercised for administrator-key,
 target-key, signer, cache-loss, rollback, and recovery scenarios before a 1.0
 release and after any material trust-root change.
+
+## Repository and release controls
+
+Pull requests and merge-group refs run DCO, dependency review, CodeQL, and the
+required test suites. Workflows use empty default permissions, job-scoped
+permissions, pinned actions, and no secrets for fork pull requests. Release
+tags, checksums, SBOMs, and OIDC attestations bind published artifacts to a
+reviewed source commit. The public baseline policy in
+[`docs/openssf-baseline.md`](docs/openssf-baseline.md) records the review
+cadence, vulnerability response, and support controls.
