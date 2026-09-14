@@ -91,6 +91,21 @@ let
         nix-seal completions fish > "$out/share/nix-seal/completions/nix-seal.fish"
         nix-seal completions nushell > "$out/share/nix-seal/completions/nix-seal.nu"
       '';
+
+  documentationSiteFor =
+    system:
+    let
+      pkgs = inputs.nixpkgs.legacyPackages.${system};
+      mkdocs = pkgs.python3.withPackages (python: [ python.mkdocs ]);
+    in
+    pkgs.runCommand "nix-seal-documentation-site-${version}" { nativeBuildInputs = [ mkdocs ]; } ''
+      cp -R ${../docs} docs
+      cp -R ${../site} site
+      chmod -R u+w docs
+      mkdocs build --config-file site/mkdocs.yml --site-dir "$out" --strict
+      test -s "$out/index.html"
+      test -s "$out/search/search_index.json"
+    '';
 in
 {
   perSystem =
@@ -99,12 +114,14 @@ in
       pkgs = inputs.nixpkgs.legacyPackages.${system};
       nixSeal = packageFor system;
       documentation = documentationFor system;
+      documentationSite = documentationSiteFor system;
     in
     {
       packages = {
         default = nixSeal;
         nix-seal = nixSeal;
         inherit documentation;
+        documentation-site = documentationSite;
       };
 
       apps = {
@@ -131,6 +148,7 @@ in
               touch "$out"
             '';
       }
+      // lib.optionalAttrs (system == "x86_64-linux") { documentation-site = documentationSite; }
       // import ../nix/tests/bash-writers.nix { inherit pkgs; }
       // import ../nix/tests/module-evaluation.nix {
         inherit inputs system pkgs;
@@ -145,6 +163,9 @@ in
           inherit system pkgs;
           inherit (inputs) self;
         };
+      };
+      devShells.docs = pkgs.mkShellNoCC {
+        packages = [ (pkgs.python3.withPackages (python: [ python.mkdocs ])) ];
       };
     };
 

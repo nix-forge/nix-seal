@@ -1,0 +1,42 @@
+site_name: nix-seal
+site_description: Security-first secret management for Nix.
+site_url: https://nix-forge.github.io/nix-seal/
+repo_url: https://github.com/nix-forge/nix-seal
+repo_name: nix-forge/nix-seal
+edit_uri: edit/main/docs/
+docs_dir: ../docs
+site_dir: ../dist
+exclude_docs: |
+  adr/**
+  nix-seal.1
+strict: true
+hooks:
+  - rewrite_source_links.py
+theme:
+  name: mkdocs
+  color_mode: auto
+  user_color_mode_toggle: true
+  locale: en
+plugins:
+  - search
+markdown_extensions:
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+validation:
+  nav:
+    omitted_files: info
+    not_found: warn
+  links:
+    not_found: info
+    anchors: warn
+    unrecognized_links: info
+nav:
+  - Overview: index.md
+  - Start here: start-here.md
+  - Authoring with Nix: nix-authoring.md
+  - Storage layout: storage-layout.md
+  - Operations: runbooks.md
+  - Benchmarks: benchmarks.md
+  - Release process: release.md

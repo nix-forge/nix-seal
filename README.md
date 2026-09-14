@@ -7,7 +7,7 @@ restricted runtime directories.
 
 **Pre-release:** nix-seal has not received the independent audit required for
 1.0 and is not ready for production secrets. Start with the
-[orientation guide](docs/start-here.md) to understand the workflow and choose a
+[orientation guide](https://nix-forge.github.io/nix-seal/) to understand the workflow and choose a
 disposable example. The [roadmap](ROADMAP.md) records the remaining release gates.
 
 Start with the [Nix authoring guide](docs/nix-authoring.md) for native NixOS,
