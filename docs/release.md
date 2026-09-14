@@ -12,6 +12,26 @@ reviewers and keep tag creation protected. A 1.0 tag additionally requires the
 independent security audit and all gates in [`SPEC.md`](../SPEC.md); those human
 assurance gates are intentionally not replaced by CI automation.
 
+Before tagging, create `docs/releases/vX.Y.Z.md` with a `## Changelog` section
+covering functional changes, security impact, affected consumers, migration
+notes, verification, and the support and end-of-life window. The release job
+rejects a tag without this descriptive record. Each published asset includes
+the release tag and platform in its name, and each platform checksum file
+covers the executable, SBOM, and build metadata.
+
+To verify a release, download all assets and run the checksum file in the same
+directory, then verify the executable's GitHub attestation:
+
+```console
+gh release download vX.Y.Z --repo nix-forge/nix-seal --dir release-vX.Y.Z
+(cd release-vX.Y.Z && sha256sum -c nix-seal-vX.Y.Z-x86_64-linux.sha256)
+gh attestation verify release-vX.Y.Z/nix-seal-vX.Y.Z-x86_64-linux \
+  --repo nix-forge/nix-seal
+```
+
+The expected release identity is the `nix-forge/nix-seal` repository and its
+reviewed `.github/workflows/release.yml` workflow.
+
 The current Nix package set deliberately omits x86_64-darwin until a supported
 nixpkgs/runners combination is available. The platform contract and release
 matrix must be expanded when that limitation is removed.
