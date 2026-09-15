@@ -7,7 +7,7 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 env:
-  SLSA_BUILDER_SHA: bf01ac186602f722c516823520aef97c8670fcb8
+  SLSA_BUILDER_SHA: da90bfbbb18cfa1ceb176d55d2a1c3cd3e6b1049
 jobs:
   build:
     name: build and attest ${{ matrix.system }}
@@ -21,7 +21,7 @@ jobs:
             system: aarch64-linux
           - name: aarch64-darwin
             system: aarch64-darwin
-    uses: nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml@bf01ac186602f722c516823520aef97c8670fcb8 # v2.5.4-compatible SLSA builder
+    uses: nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml@da90bfbbb18cfa1ceb176d55d2a1c3cd3e6b1049 # v2.5.4-compatible SLSA builder
     with:
       system: ${{ matrix.system }}
     permissions:
