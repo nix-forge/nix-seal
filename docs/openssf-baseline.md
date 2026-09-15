@@ -8,9 +8,11 @@ artifacts, documentation, CI, and source history.
 
 nix-seal is a security-first secret manager for NixOS, nix-darwin, and Home
 Manager. It is pre-1.0. A release may include source archives, platform
-packages, checksums, an SBOM, and OIDC-backed provenance. The gates and
-verification process are documented in [docs/release.md](release.md). Release
-tags are immutable and follow the repository's SemVer policy.
+packages, checksums, an SBOM, and OIDC-backed provenance. The release assets
+are built and attested by the pinned reusable builder described in
+[docs/slsa.md](slsa.md). The gates and verification process are documented in
+[docs/release.md](release.md). Release tags are immutable and follow the
+repository's SemVer policy.
 
 This repository is part of the related projects listed in the
 [nix-forge project security contract](https://github.com/nix-forge/.github/blob/main/PROJECTS.md).

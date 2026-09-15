@@ -4,82 +4,45 @@ on:
     tags: ["v*.*.*"]
 permissions: {}
 concurrency:
-  group: "release-${{ github.ref }}"
+  group: release-${{ github.ref }}
   cancel-in-progress: false
+env:
+  SLSA_BUILDER_SHA: da90bfbbb18cfa1ceb176d55d2a1c3cd3e6b1049
 jobs:
   build:
-    name: build
-    timeout-minutes: 90
+    name: build and attest ${{ matrix.system }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: x86_64-linux
-            runner: ubuntu-latest
             system: x86_64-linux
           - name: aarch64-linux
-            runner: ubuntu-24.04-arm
             system: aarch64-linux
           - name: aarch64-darwin
-            runner: macos-26
             system: aarch64-darwin
-    runs-on: ${{ matrix.runner }}
+    uses: nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml@da90bfbbb18cfa1ceb176d55d2a1c3cd3e6b1049 # v2.5.4-compatible SLSA builder
+    with:
+      system: ${{ matrix.system }}
     permissions:
-      contents: read
-    env:
-      RELEASE_TAG: ${{ github.ref_name }}
-      TARGET_SYSTEM: ${{ matrix.system }}
-      ARTIFACT_NAME: ${{ matrix.name }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@a53126de1b983ccdb5ab7b1ab9989ef921a880d5 # v2.5.3
-        with:
-          cache: 'false'
-          cache-scope: release-build
-      - name: Build the reproducible Nix package
-        run: nix build --print-build-logs ".#packages.${TARGET_SYSTEM}.nix-seal"
-      - name: Stage executable
-        run: |
-          mkdir -p dist
-          cp result/bin/nix-seal "dist/nix-seal-${RELEASE_TAG}-${ARTIFACT_NAME}"
-          chmod 0755 "dist/nix-seal-${RELEASE_TAG}-${ARTIFACT_NAME}"
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
-        with:
-          path: result
-          format: cyclonedx-json
-          output-file: "dist/nix-seal-${{ github.ref_name }}-${{ matrix.name }}.cdx.json"
-      - name: Record checksums and build metadata
-        run: |
-          {
-            echo "commit=${GITHUB_SHA}"
-            echo "tag=${RELEASE_TAG}"
-            echo "system=${TARGET_SYSTEM}"
-            echo "runner=${RUNNER_OS}/${RUNNER_ARCH}"
-            echo "rust-toolchain=$(test -f rust-toolchain.toml && sed -n 's/^channel = \"\(.*\)\"$/\1/p' rust-toolchain.toml || true)"
-          } > "dist/nix-seal-${RELEASE_TAG}-${ARTIFACT_NAME}.build-info"
-          (cd dist && sha256sum -- * > "nix-seal-${RELEASE_TAG}-${ARTIFACT_NAME}.sha256")
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: nix-seal-release-${{ matrix.name }}
-          path: dist
-          if-no-files-found: error
-          retention-days: 7
+      contents: read # Read the tagged source for the release build.
+      id-token: write # Request a short-lived Sigstore signing identity.
+      attestations: write # Publish provenance to GitHub's attestation store.
   publish:
     name: publish
     timeout-minutes: 15
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     permissions:
-      contents: write # Update trusted repository automation.
-      id-token: write # Authenticate the configured publication service.
-      attestations: write # Publish release provenance.
+      actions: read # Download the immutable builder outputs.
+      contents: write # Publish the verified tagged release.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
           persist-credentials: false
       - name: Validate release metadata
         env:
@@ -87,26 +50,56 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          notes="docs/releases/${TAG}.md"
+          notes="docs/releases/$TAG.md"
           test -s "$notes"
           grep -q '^## Changelog$' "$notes"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Download the builder outputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: nix-seal-release-*
+          pattern: nix-seal-slsa-release-*
           path: dist
           merge-multiple: true
-      - name: Verify release inputs
+      - name: Verify release bytes
         run: |
           set -euo pipefail
-          test -n "${GITHUB_REF_NAME}"
-          test -n "$(find dist -type f -name 'nix-seal-*' -not -name '*.cdx.json' -not -name '*.sha256' -not -name '*.build-info' | head -n1)"
-          (cd dist && for checksum in *.sha256; do sha256sum -c "$checksum"; done)
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/nix-seal-*
-      - name: Publish signed release assets
+          for system in x86_64-linux aarch64-linux aarch64-darwin; do
+            base="nix-seal-${GITHUB_REF_NAME}-${system}"
+            for suffix in '' '.cdx.json' '.build-info' '.sha256'; do
+              test -s "dist/$base$suffix"
+            done
+            (
+              cd dist
+              sha256sum -c "$base.sha256"
+            )
+            info="dist/$base.build-info"
+            grep -Fx "repository=$GITHUB_REPOSITORY" "$info"
+            grep -Fx "source_ref=$GITHUB_REF" "$info"
+            grep -Fx "source_commit=$GITHUB_SHA" "$info"
+            grep -Fx "tag=$GITHUB_REF_NAME" "$info"
+            grep -Fx "system=$system" "$info"
+            grep -Fx "builder_workflow=nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml" "$info"
+          done
+          tag_commit="$(git rev-parse "${GITHUB_REF}^{commit}")"
+          [[ "$tag_commit" == "$GITHUB_SHA" ]]
+      - name: Verify release provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLSA_BUILDER_SHA: ${{ env.SLSA_BUILDER_SHA }}
+        run: |
+          set -euo pipefail
+          for system in x86_64-linux aarch64-linux aarch64-darwin; do
+            base="dist/nix-seal-${GITHUB_REF_NAME}-${system}"
+            for suffix in '' '.cdx.json' '.build-info' '.sha256'; do
+              gh attestation verify "$base$suffix" \
+                --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml \
+                --signer-digest "$SLSA_BUILDER_SHA" \
+                --source-ref "$GITHUB_REF"
+            done
+          done
+      - name: Publish verified release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --notes-file "docs/releases/${GITHUB_REF_NAME}.md"
-          --title "nix-seal ${GITHUB_REF_NAME}"
+          gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --draft --notes-file "docs/releases/${GITHUB_REF_NAME}.md"
+          --title "nix-seal ${GITHUB_REF_NAME}" && gh release edit "${GITHUB_REF_NAME}" --draft=false
