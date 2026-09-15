@@ -1,18 +1,13 @@
 name: Release
-
 on:
   push:
     tags: ["v*.*.*"]
-
 permissions: {}
-
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
-
 env:
   SLSA_BUILDER_SHA: bf01ac186602f722c516823520aef97c8670fcb8
-
 jobs:
   build:
     name: build and attest ${{ matrix.system }}
@@ -26,7 +21,7 @@ jobs:
             system: aarch64-linux
           - name: aarch64-darwin
             system: aarch64-darwin
-    uses: nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml@bf01ac186602f722c516823520aef97c8670fcb8 # reviewed SLSA builder
+    uses: nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml@bf01ac186602f722c516823520aef97c8670fcb8 # v2.5.4-compatible SLSA builder
     with:
       system: ${{ matrix.system }}
     permissions:
@@ -106,7 +101,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          gh release create "${GITHUB_REF_NAME}" dist/*
-          --verify-tag --draft --notes-file "docs/releases/${GITHUB_REF_NAME}.md"
-          --title "nix-seal ${GITHUB_REF_NAME}"
-          && gh release edit "${GITHUB_REF_NAME}" --draft=false
+          gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --draft --notes-file "docs/releases/${GITHUB_REF_NAME}.md"
+          --title "nix-seal ${GITHUB_REF_NAME}" && gh release edit "${GITHUB_REF_NAME}" --draft=false

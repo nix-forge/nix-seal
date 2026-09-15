@@ -31,7 +31,7 @@ jobs:
       statuses: write # Report verified queue job results.
     steps:
       - name: Reconcile verified automation
-        uses: nix-forge/ci/actions/reconcile-queue@b89376282fb7de9e78fe31fcf221ee8f730039d6 # SLSA contract rollout
+        uses: nix-forge/ci/actions/reconcile-queue@b89376282fb7de9e78fe31fcf221ee8f730039d6 # v2.5.4-compatible
         with:
           workflows: '["ci.yml", "dependency-review.yml", "codeql.yml"]'
           source-run-id: ${{ inputs.source_run_id }}
