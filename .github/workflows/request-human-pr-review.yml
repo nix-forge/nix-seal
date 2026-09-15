@@ -11,6 +11,6 @@ jobs:
     name: request-review
     permissions:
       pull-requests: write # Update pull request metadata.
-    uses: nix-forge/ci/.github/workflows/request-review.yml@a53126de1b983ccdb5ab7b1ab9989ef921a880d5 # v2.5.3
+    uses: nix-forge/ci/.github/workflows/request-review.yml@b89376282fb7de9e78fe31fcf221ee8f730039d6 # SLSA contract rollout
     with:
       reviewer: IanHollow
