@@ -15,8 +15,13 @@ identity or organizational affiliation where relevant, and the narrowest role
 needed. Access is revisited when responsibility changes and removed promptly
 when it ends.
 
-`main` should require signed-off commits, review, passing required checks, and
-no force pushes. Releases follow SemVer. CLI, plan, artifact, plugin protocol,
+`main` requires signed-off commits, passing required checks, the merge queue,
+and no force pushes. With one maintainer, GitHub requires no independent
+approval; the maintainer may use AI review and authorize an agent to merge.
+Security-critical changes still need a documented maintainer decision, an ADR
+where required, and independent review when another qualified maintainer is
+available. See the [organization review policy](https://github.com/nix-forge/.github/blob/main/GOVERNANCE.md#solo-maintainer-review-and-automation).
+Releases follow SemVer. CLI, plan, artifact, plugin protocol,
 and module compatibility are versioned independently where necessary.
 Deprecations remain for at least one minor release.
 
