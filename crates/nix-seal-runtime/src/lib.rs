@@ -307,6 +307,8 @@ pub struct ActivationArtifact<'a> {
     pub secret_id: &'a Id,
     /// Expected canonical administrator ciphertext hash.
     pub source_ciphertext_hash: &'a str,
+    /// Expected secret-specific artifact policy hash.
+    pub artifact_policy_hash: &'a str,
     /// Exact policy-selected artifact generation.
     pub artifact_generation: u64,
     /// Signer identities and encoded public keys derived from the plan.
@@ -489,8 +491,7 @@ fn prepare_artifacts<'a>(
             serde_json::from_slice(&envelope_bytes).map_err(|_| RuntimeError::Envelope)?;
         let expected = ExpectedBinding {
             tool_version: request.tool_version,
-            plan_hash: request.plan_hash,
-            target_policy_hash: request.target_policy_hash,
+            artifact_policy_hash: artifact.artifact_policy_hash,
             source_ciphertext_hash: artifact.source_ciphertext_hash,
             artifact_ciphertext_hash: &artifact_hash,
             target_id: request.target_id,
@@ -2426,6 +2427,7 @@ mod tests {
             tool_version: "0.1.0-alpha.1".to_owned(),
             plan_hash: PLAN_HASH.to_owned(),
             target_policy_hash: TARGET_POLICY_HASH.to_owned(),
+            artifact_policy_hash: TARGET_POLICY_HASH.to_owned(),
             source_ciphertext_hash: SOURCE_HASH.to_owned(),
             artifact_ciphertext_hash: artifact_hash,
             target_id: target_id.clone(),
@@ -2478,6 +2480,7 @@ mod tests {
             envelope: &fixture.envelope,
             secret_id,
             source_ciphertext_hash: SOURCE_HASH,
+            artifact_policy_hash: TARGET_POLICY_HASH,
             artifact_generation: 1,
             approval_signers: &fixture.approval_signers,
             approval_threshold: 1,
@@ -2509,6 +2512,7 @@ mod tests {
             tool_version: "0.1.0-alpha.1".to_owned(),
             plan_hash: PLAN_HASH.to_owned(),
             target_policy_hash: TARGET_POLICY_HASH.to_owned(),
+            artifact_policy_hash: TARGET_POLICY_HASH.to_owned(),
             source_ciphertext_hash: SOURCE_HASH.to_owned(),
             artifact_ciphertext_hash: artifact_hash,
             target_id: fixture.target_id.clone(),
@@ -2769,6 +2773,7 @@ mod tests {
             envelope: &envelope,
             secret_id: &binary_id,
             source_ciphertext_hash: SOURCE_HASH,
+            artifact_policy_hash: TARGET_POLICY_HASH,
             artifact_generation: 1,
             approval_signers: &fixture.approval_signers,
             approval_threshold: 1,

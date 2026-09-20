@@ -214,6 +214,17 @@ let
       }
     ];
   };
+  integratedHomeConfiguration = standaloneHomeConfiguration.extendModules {
+    specialArgs = {
+      osConfig = {
+        nixSeal = {
+          enable = true;
+          linux.volatileRuntime.enable = false;
+          darwin.volatileRuntime.enable = false;
+        };
+      };
+    };
+  };
   overrideConfiguration = inputs.nixpkgs.lib.nixosSystem {
     inherit system;
     specialArgs = {
@@ -439,6 +450,11 @@ in
     '';
   deployment-readiness =
     let
+      expectedServiceExecutable =
+        if pkgs.stdenv.hostPlatform.isLinux then
+          "/run/current-system/sw/bin/systemctl"
+        else
+          "/bin/launchctl";
       integrated = configuration.extendModules {
         specialArgs = {
           configName = "fixture";
@@ -448,7 +464,7 @@ in
           ({ lib, ... }: {
             options.home-manager.users = lib.mkOption {
               type = lib.types.attrs;
-              default.tester = standaloneHomeConfiguration.config;
+              default.tester = integratedHomeConfiguration.config;
             };
           })
         ];
@@ -508,6 +524,7 @@ in
         EOF
         chmod +x readiness-probe runuser-probe
         grep -q -- '--default-configuration' ${preflightScript}
+        grep -q -- '--configuration nixosConfigurations.fixture' ${preflightScript}
         if grep -q -- '--default-configuration' ${homePreflightScript}; then
           echo "Standalone Home Manager incorrectly claimed the flake default" >&2
           exit 1
@@ -533,6 +550,9 @@ in
         diff -u expected-home events
 
         jq -e '.schema == "nix-seal.deployment.v1" and (.targets | length) == 2' ${integrated.config.nixSeal.deploymentFile}
+        home_plan=$(jq -r '.targets[] | select(.target == "home/tester/fixture") | .plan' ${integrated.config.nixSeal.deploymentFile})
+        jq --arg executable ${lib.escapeShellArg expectedServiceExecutable} -e \
+          '.targets["home/tester/fixture"].serviceActions.executable == $executable' "$home_plan"
         # The host may already have a private cache. Test an absent cache inside
         # the sandbox so readiness diagnoses missing artifacts, not permissions.
         jq --arg cache "$TMPDIR/empty-cache" '.artifactCacheRoot = $cache' \
@@ -543,7 +563,10 @@ in
           echo "readiness accepted an unprepared system" >&2
           exit 1
         fi
-        jq -e '.ready == false and (.errors | length) == 0 and (.artifacts[0].missing | length) > 0 and (.preparationCommand | contains("prepare --identity")) and (.preparationCommand | contains("--deployment") | not)' report.json
+        if ! jq -e '.ready == false and (.errors | length) == 0 and (.artifacts[0].missing | length) > 0 and (.preparationCommand | contains("prepare --identity")) and (.preparationCommand | contains("--deployment") | not)' report.json; then
+          jq . report.json >&2
+          exit 1
+        fi
         touch "$out"
       '';
   public-template-values =

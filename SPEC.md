@@ -52,10 +52,14 @@ one interoperable age file per secret/output.
 The secure default is administrator-to-target rekeying. Canonical sources are
 encrypted to administrator/recovery/hardware recipients. A policy plan produces
 separate target ciphertext objects. Objects are kept only in the ciphertext
-cache and deterministic Nix store derivations. A signed manifest binds the plan
-hash, canonical ciphertext hash, target and secret IDs, recipient fingerprint,
-artifact generation, tool version, and schema version. Activation verifies all
-bindings before decryption.
+cache and deterministic Nix store derivations. A signed artifact-v3 manifest
+binds the secret-specific artifact-policy hash, canonical ciphertext hash,
+target and secret IDs, recipient fingerprint, artifact generation, tool
+version, and schema version. It also records the full plan and target-policy
+hashes as signed issuance metadata. Activation recomputes the artifact policy
+from the installed plan and verifies all artifact bindings before decryption;
+the complete plan remains authoritative for the activation document and
+service/template projection.
 
 Direct mode addresses canonical Git ciphertext to consumers. It requires an
 explicit opt-in and warns that a stolen target key can decrypt matching current
@@ -96,13 +100,13 @@ provides a reusable `targetName` argument. Omitting the selector preserves the
 legacy explicit-identity mode.
 
 The cache is `$XDG_CACHE_HOME/nix-seal/v1`, contains only ciphertext, signed
-manifests, and public metadata, and addresses objects by plan, target policy,
+manifests, and public metadata, and addresses objects by artifact-policy,
 source, recipient, target, secret, generation, and format bindings. Transactions
 use private same-filesystem directories, locks, fsync, and atomic rename.
 Rekeying never occurs in Nix builds. Missing fixed-output objects fail with the
 exact safe rekey command. Export/import and encrypted closure copy support
 remote builds. GC is dry-run-first and retains only target artifacts that are
-authenticated by the active plan, target policy, canonical source hash,
+authenticated by the active secret artifact policy, canonical source hash,
 deterministic address, and current approval threshold. Generic v1 cache objects
 have no authenticated reachability edge and are candidates until a future format
 introduces one. Cache export/import exchanges a staged, ciphertext-only

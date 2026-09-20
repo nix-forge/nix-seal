@@ -31,6 +31,8 @@ pub struct RekeyRequest<'a> {
     pub plan_hash: &'a str,
     /// Hash of the deterministic target policy derived from the plan.
     pub target_policy_hash: &'a str,
+    /// Hash of the secret-specific artifact policy.
+    pub artifact_policy_hash: &'a str,
     /// Bound target ID.
     pub target_id: &'a Id,
     /// Bound secret ID.
@@ -59,6 +61,8 @@ pub struct DirectRequest<'a> {
     pub plan_hash: &'a str,
     /// Hash of the deterministic target policy derived from the plan.
     pub target_policy_hash: &'a str,
+    /// Hash of the secret-specific artifact policy.
+    pub artifact_policy_hash: &'a str,
     /// Bound target ID.
     pub target_id: &'a Id,
     /// Bound secret ID.
@@ -139,8 +143,7 @@ pub fn rekey(cache: &Cache, request: &RekeyRequest<'_>) -> Result<RekeyResult, R
 
     let recipient_fingerprint = nix_seal_crypto::recipient_fingerprint(request.target_recipient)?;
     let address = ArtifactAddress::new(
-        request.plan_hash,
-        request.target_policy_hash,
+        request.artifact_policy_hash,
         &source_ciphertext_hash,
         &recipient_fingerprint,
         request.target_id.as_str(),
@@ -179,6 +182,7 @@ pub fn rekey(cache: &Cache, request: &RekeyRequest<'_>) -> Result<RekeyResult, R
         tool_version: request.tool_version.to_owned(),
         plan_hash: request.plan_hash.to_owned(),
         target_policy_hash: request.target_policy_hash.to_owned(),
+        artifact_policy_hash: request.artifact_policy_hash.to_owned(),
         source_ciphertext_hash: source_ciphertext_hash.clone(),
         artifact_ciphertext_hash: artifact_ciphertext_hash.clone(),
         target_id: request.target_id.clone(),
@@ -253,8 +257,7 @@ pub fn stage_direct(cache: &Cache, request: &DirectRequest<'_>) -> Result<RekeyR
 
     let recipient_fingerprint = nix_seal_crypto::recipient_fingerprint(request.target_recipient)?;
     let address = ArtifactAddress::new(
-        request.plan_hash,
-        request.target_policy_hash,
+        request.artifact_policy_hash,
         &source_ciphertext_hash,
         &recipient_fingerprint,
         request.target_id.as_str(),
@@ -276,6 +279,7 @@ pub fn stage_direct(cache: &Cache, request: &DirectRequest<'_>) -> Result<RekeyR
         tool_version: request.tool_version.to_owned(),
         plan_hash: request.plan_hash.to_owned(),
         target_policy_hash: request.target_policy_hash.to_owned(),
+        artifact_policy_hash: request.artifact_policy_hash.to_owned(),
         source_ciphertext_hash: source_ciphertext_hash.clone(),
         artifact_ciphertext_hash,
         target_id: request.target_id.clone(),
@@ -321,8 +325,7 @@ fn authenticate_record(
     trusted.insert_encoded(&signing_public)?;
     let expected = ExpectedBinding {
         tool_version: request.tool_version,
-        plan_hash: request.plan_hash,
-        target_policy_hash: request.target_policy_hash,
+        artifact_policy_hash: request.artifact_policy_hash,
         source_ciphertext_hash: &source_ciphertext_hash,
         artifact_ciphertext_hash: &record.artifact_ciphertext_hash,
         target_id: request.target_id,
@@ -357,8 +360,7 @@ fn authenticate_direct_record(
     trusted.insert_encoded(&signing_public)?;
     let expected = ExpectedBinding {
         tool_version: request.tool_version,
-        plan_hash: request.plan_hash,
-        target_policy_hash: request.target_policy_hash,
+        artifact_policy_hash: request.artifact_policy_hash,
         source_ciphertext_hash: &source_ciphertext_hash,
         artifact_ciphertext_hash: &record.artifact_ciphertext_hash,
         target_id: request.target_id,
@@ -516,6 +518,7 @@ mod tests {
             target_recipient,
             plan_hash: PLAN_HASH,
             target_policy_hash: TARGET_POLICY_HASH,
+            artifact_policy_hash: TARGET_POLICY_HASH,
             target_id,
             secret_id,
             artifact_generation: 1,
@@ -538,6 +541,7 @@ mod tests {
             target_recipient,
             plan_hash: PLAN_HASH,
             target_policy_hash: TARGET_POLICY_HASH,
+            artifact_policy_hash: TARGET_POLICY_HASH,
             target_id,
             secret_id,
             artifact_generation: 1,

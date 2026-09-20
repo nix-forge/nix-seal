@@ -13,6 +13,8 @@ use std::{
 
 const WIRE_LIMIT: u64 = 128 * 1024 * 1024;
 const ENTRY_LIMIT: usize = 10_000;
+const PREPARATION_REQUEST_SCHEMA: &str = "nix-seal.prepare-request.v2";
+const PREPARATION_RESPONSE_SCHEMA: &str = "nix-seal.prepare-response.v2";
 const PHASES: [ActivationPhase; 4] = [
     ActivationPhase::Partitioning,
     ActivationPhase::Users,
@@ -121,6 +123,10 @@ struct Artifact {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Response {
     schema: String,
+    /// Artifact format the worker used. Keeping this explicit prevents a
+    /// newer target from accepting a successful response from an older
+    /// administrator binary that still emits legacy envelopes.
+    artifact_schema: String,
     prepared: bool,
     reused: usize,
     created: usize,
@@ -272,7 +278,7 @@ fn default_configuration_help(flake: &str, nix_error: Option<&str>) -> String {
         for candidate in candidates {
             let _ = write!(
                 message,
-                "\n  nix-seal prepare --flake {} --identity /path/to/admin.agekey --signing-key /path/to/release.key",
+                "\n  nix run .#nix-seal -- prepare --flake {} --identity /path/to/admin.agekey --signing-key /path/to/release.key",
                 shell_quote(&format!("{flake}#{candidate}"))
             );
         }
@@ -427,14 +433,14 @@ fn make_request(deployment: &Deployment, root: &Path) -> Result<Request> {
         });
     }
     Ok(Request {
-        schema: "nix-seal.prepare-request.v1".to_owned(),
+        schema: PREPARATION_REQUEST_SCHEMA.to_owned(),
         targets,
         sources,
     })
 }
 
 fn materialize_sources(request: &Request, root: &Path) -> Result<()> {
-    if request.schema != "nix-seal.prepare-request.v1"
+    if request.schema != PREPARATION_REQUEST_SCHEMA
         || request.targets.len() > ENTRY_LIMIT
         || request.sources.len() > ENTRY_LIMIT
     {
@@ -556,7 +562,8 @@ fn prepare_request(
         }
     }
     let mut response = Response {
-        schema: "nix-seal.prepare-response.v1".to_owned(),
+        schema: PREPARATION_RESPONSE_SCHEMA.to_owned(),
+        artifact_schema: nix_seal_manifest::ARTIFACT_SCHEMA.to_owned(),
         prepared: arguments.execute,
         reused: 0,
         created: 0,
@@ -592,6 +599,7 @@ fn prepare_request(
                     &cache,
                     &policy,
                     &policy_hash,
+                    &nix_seal_policy::secret_artifact_policy_hash(&policy, id)?,
                     secret,
                     temporary.path(),
                     &target.target,
@@ -661,8 +669,7 @@ fn stage_bundle(bundle: &Bundle, root: &Path) -> Result<()> {
         let signed = serde_json::from_slice(&envelope)?;
         let manifest = nix_seal_manifest::inspect_unverified(&signed)?;
         let address = nix_seal_cache::ArtifactAddress::new(
-            &manifest.plan_hash,
-            &manifest.target_policy_hash,
+            &manifest.artifact_policy_hash,
             &manifest.source_ciphertext_hash,
             &manifest.recipient_fingerprint,
             manifest.target_id.as_str(),
@@ -818,7 +825,12 @@ pub(super) fn run(arguments: &Args, json: bool) -> Result<()> {
         let output = invoke(
             Command::new("ssh").args(["--", host, &remote]),
             &serde_json::to_vec(&request)?,
-        )?;
+        )
+        .with_context(|| {
+            format!(
+                "administrator host {host:?} did not run a compatible nix-seal preparation worker; update nix-seal on the administrator and target machines, or set --administrator-program to the matching remote executable"
+            )
+        })?;
         decode(output.as_slice())?
     } else {
         prepare_request(
@@ -832,8 +844,14 @@ pub(super) fn run(arguments: &Args, json: bool) -> Result<()> {
             &super::default_cache_root(),
         )?
     };
-    if response.schema != "nix-seal.prepare-response.v1" || response.prepared != arguments.execute {
-        bail!("administrator returned an incompatible preparation response");
+    if response.schema != PREPARATION_RESPONSE_SCHEMA
+        || response.artifact_schema != nix_seal_manifest::ARTIFACT_SCHEMA
+        || response.prepared != arguments.execute
+    {
+        bail!(
+            "administrator returned an incompatible preparation response; both machines must use a nix-seal build that supports artifact format {}",
+            nix_seal_manifest::ARTIFACT_SCHEMA
+        );
     }
     if arguments.execute {
         install_response(&deployment, &request, &response)?;

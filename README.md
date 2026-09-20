@@ -44,8 +44,9 @@ The validated `plan.v2` is the single policy authority.
 Rekey and activation derive recipients, hashes, authorized secret/template sets,
 runtime permissions, service actions, and per-secret approval thresholds from
 that projection rather than trusting duplicate command-line or Nix options.
-Signed artifact v2 manifests bind its hash, so policy substitution fails before
-decryption.
+Signed artifact v3 manifests bind each target ciphertext to its secret-specific
+policy, so policy substitution fails before decryption without making unrelated
+secret or service changes require a full re-preparation.
 
 ## Activation phases
 
@@ -350,7 +351,7 @@ the checkout; nix-seal discovers its system and embedded Home Manager plans and
 cache locations:
 
 ```console
-nix-seal prepare \
+nix run .#nix-seal -- prepare \
   --identity /private/admin.agekey --signing-key /private/release.key
 ```
 
@@ -364,15 +365,19 @@ When the keys are on another machine, add an SSH destination. The key paths then
 refer to files on that administrator machine:
 
 ```console
-nix-seal prepare \
+nix run .#nix-seal -- prepare \
   --administrator-host admin.example \
   --identity /private/admin.agekey --signing-key /private/release.key
 ```
 
-Both machines need a nix-seal version supporting `prepare`. Use
-`--administrator-program /path/to/nix-seal` when the remote executable is not on
-its SSH PATH. Review the dry run, then repeat with `--execute`. Only canonical
-ciphertext and public plans travel to the administrator. Signed ciphertext
+The command uses the nix-seal build from the flake checkout, so the local
+preparation protocol and artifact format stay aligned with the configuration.
+The administrator machine must run a compatible nix-seal worker as well; a
+mismatched worker is rejected before any cache is changed. Use
+`--administrator-program /path/to/nix-seal` only when the compatible remote
+executable is not on its SSH PATH. Review the dry run, then repeat with
+`--execute`. Only canonical ciphertext and public plans travel to the administrator.
+Signed ciphertext
 returns to the target, which verifies the complete batch before installation.
 Administrator keys stay on their machine. Installing a system or another user's
 cache prompts for sudo; the administrator key operation runs without elevation.
@@ -465,10 +470,11 @@ implicitly, so recovery remains possible and `check --deep` fails until policy
 is intentionally updated or the ciphertext is restored.
 
 Cache garbage collection is explicitly dry-run-first and trusts neither cache
-names nor unsigned metadata. It recomputes the active plan and target-policy
-hashes, hashes the canonical source ciphertext through a no-follow descriptor,
+names nor unsigned metadata. It recomputes the active secret artifact-policy
+hash, hashes the canonical source ciphertext through a no-follow descriptor,
 reconstructs the deterministic artifact address, and checks the current approval
-threshold before retaining an artifact:
+threshold before retaining an artifact. The complete target policy still governs
+activation projection and service actions:
 
 ```console
 nix-seal cache gc --plan plan.v2.json --repository-root .
@@ -660,9 +666,10 @@ use it for production secrets yet. Report vulnerabilities according to
 `nix-seal doctor --plan plan.v2.json --repository-root .` performs the same deep
 public-policy and canonical-ciphertext checks used before deployment, then
 reports authenticated and stale cache-artifact counts plus platform/runtime
-caveats. An artifact is authenticated only when its current plan, target policy,
-source hash, recipient, address, manifest, and approval threshold all verify. It
-emits only public metadata and does not decrypt secrets. A valid plan with missing
+caveats. An artifact is authenticated only when its current secret artifact
+policy, source hash, recipient, address, manifest, and approval threshold all
+verify. The full plan still authenticates the activation projection and service
+actions. It emits only public metadata and does not decrypt secrets. A valid plan with missing
 required artifacts now exits nonzero, with `planValid: true`, `ready: false`, and
 `ok: false` in JSON. Per-target reports identify the missing secret IDs and
 candidate rejection reasons. Multiple generations of one secret cannot satisfy
@@ -670,11 +677,14 @@ another secret's requirement.
 
 `nix-seal readiness --spec /path/to/activation.json` checks installed artifacts
 without needing canonical sources or identities. Repeat `--spec` to check every
-phase for the invoking cache owner. Generated activation checks also pass
-`--deployment`, so a failure prints the exact preparation command for the built
-configuration. With `--json`, the same command appears in `preparationCommand`.
-Run the check as the cache owner. Unlike `doctor`, this command does not need an
-administrator checkout and is suitable for deployment checks.
+phase for the invoking cache owner. Generated activation checks pass the public
+flake configuration selector, so a failure prints a copyable `--flake` command
+such as `--flake '.#nixosConfigurations.workstation'`. Saved-default failures
+print the shorter `nix run .#nix-seal -- prepare` command. With `--json`, the
+same command appears in `preparationCommand`. The `--deployment` option remains an
+advanced exact-built recovery interface and is not part of normal readiness
+instructions. Run the check as the cache owner. Unlike `doctor`, this command
+does not need an administrator checkout and is suitable for deployment checks.
 
 Non-usage failures use stable exit categories: `1` operational, `3` policy, `4`
 cryptographic or approval verification, `5` cache/canonical-storage, and `6`

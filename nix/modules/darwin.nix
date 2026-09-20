@@ -4,8 +4,9 @@ let
   cfg = config.nixSeal;
   configName = args.configName or null;
   nixSealDefaultConfiguration = args.nixSealDefaultConfiguration or null;
+  configurationSelector = if configName == null then null else "darwinConfigurations.${configName}";
   isDefaultConfiguration =
-    configName != null && nixSealDefaultConfiguration == "darwinConfigurations.${configName}";
+    configurationSelector != null && nixSealDefaultConfiguration == configurationSelector;
   embeddedHomeManagerUsers =
     if builtins.hasAttr "home-manager" config then
       builtins.attrNames (config."home-manager".users or { })
@@ -188,6 +189,10 @@ in
                   ++ [
                     "--deployment"
                     (toString cfg.deploymentFile)
+                  ]
+                  ++ lib.optionals (configurationSelector != null) [
+                    "--configuration"
+                    configurationSelector
                   ]
                   ++ lib.optionals isDefaultConfiguration [ "--default-configuration" ]
                 );

@@ -2,18 +2,21 @@
 
 Status: accepted
 
-Configuration changes can invalidate signed artifacts before any secret value
-changes. Activation must continue to reject those artifacts, but operators need
+Secret-policy configuration changes can invalidate signed artifacts before any
+secret value changes. Unrelated plan changes should reuse unaffected v3
+artifacts. Activation must continue to reject mismatched artifacts, but operators need
 to discover the problem before a system switch stops services. Readiness now uses
 the same artifact selection and verification as activation. NixOS runs it through
 `system.preSwitchChecks` for system and embedded home targets, under each cache
 owner. Home Manager checks before its write boundary. Activation repeats the
 verification because readiness cannot reserve cache state or prevent expiry.
-Generated checks pass the public deployment description and whether it came from
-the flake's saved default to readiness. A default failure prints the stable bare
-preparation command; a previous or explicitly selected generation prints a
-shell-quoted exact-built recovery command. JSON reports expose the same command
-to deployment wrappers.
+Generated checks pass the public deployment description, the flake configuration
+selector, and whether it came from the flake's saved default to readiness. A
+default failure prints the stable bare preparation command. An explicitly
+selected configuration prints a shell-quoted, copyable `--flake` selector.
+JSON reports expose the same stable command to deployment wrappers. The
+`--deployment` option remains an advanced exact-built recovery interface, not the
+normal user-facing recovery path.
 
 The modules expose a public deployment description containing target IDs, plans,
 activation specifications, cache destinations, and cache owners. A project may
@@ -40,7 +43,8 @@ remain trusted code inputs.
 when required artifacts are absent. The existing JSON schema gains additive
 `planValid`, `ready`, and per-target readiness fields; `ok` now also requires
 readiness. Candidate rejection reasons are public diagnostics, not assertions
-that an unverified envelope is authentic. Neither signature bindings nor approval
-thresholds change. Automatic preparation creates single-signer artifacts;
+that an unverified envelope is authentic. Artifact v3 uses the secret-scoped
+binding described in ADR 0027; approval thresholds and full activation
+projection checks remain unchanged. Automatic preparation creates single-signer artifacts;
 threshold policies can reuse fully approved artifacts and otherwise require the
 existing explicit approval workflow.

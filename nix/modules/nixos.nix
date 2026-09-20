@@ -10,8 +10,9 @@ let
   cfg = config.nixSeal;
   configName = args.configName or null;
   nixSealDefaultConfiguration = args.nixSealDefaultConfiguration or null;
+  configurationSelector = if configName == null then null else "nixosConfigurations.${configName}";
   isDefaultConfiguration =
-    configName != null && nixSealDefaultConfiguration == "nixosConfigurations.${configName}";
+    configurationSelector != null && nixSealDefaultConfiguration == configurationSelector;
   inherit (import ./support.nix { inherit lib pkgs; }) groupCredentials;
   embeddedHomeManagerUsers =
     if builtins.hasAttr "home-manager" config then
@@ -341,6 +342,10 @@ in
                 ++ [
                   "--deployment"
                   (toString cfg.deploymentFile)
+                ]
+                ++ lib.optionals (configurationSelector != null) [
+                  "--configuration"
+                  configurationSelector
                 ]
                 ++ lib.optionals isDefaultConfiguration [ "--default-configuration" ]
               );

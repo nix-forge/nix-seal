@@ -1,7 +1,7 @@
 //! Preparation, transfer validation, and retry behavior with generated test keys.
 use super::{
-    Bundle, Deployment, Destination, Request, WorkerArgs, decode, inspect_all, make_request,
-    materialize_sources, prepare_request, shell_quote, stage_bundle,
+    Bundle, Deployment, Destination, Request, Response, WorkerArgs, decode, inspect_all,
+    make_request, materialize_sources, prepare_request, shell_quote, stage_bundle,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::{collections::BTreeMap, path::PathBuf};
@@ -175,7 +175,11 @@ fn changed_plan_reprovisions_and_preserves_previous_generation() -> TestResult {
     secret.runtime.mode = "0600".to_owned();
     let missing = crate::readiness::plan_reports(&request.targets[0].plan, &cache)?;
     assert!(!missing[0].is_ready());
-    assert!(missing[0].failure_message().contains("different plan"));
+    assert!(
+        missing[0]
+            .failure_message()
+            .contains("different secret policy")
+    );
     let response = prepare_request(&request, &fixture.arguments(true), &cache)?;
     assert_eq!(response.created, 1);
     assert_eq!(
@@ -188,6 +192,36 @@ fn changed_plan_reprovisions_and_preserves_previous_generation() -> TestResult {
         crate::readiness::plan_reports(&request.targets[0].plan, &cache)?
             .iter()
             .all(crate::readiness::Report::is_ready)
+    );
+    Ok(())
+}
+
+#[test]
+fn unrelated_plan_changes_keep_existing_artifact_ready() -> TestResult {
+    let fixture = fixture()?;
+    let mut request = fixture.request()?;
+    let cache = fixture.temporary.path().join("cache");
+    prepare_request(&request, &fixture.arguments(true), &cache)?;
+    request.targets[0]
+        .plan
+        .targets
+        .get_mut(&fixture.target)
+        .ok_or("missing target")?
+        .tags
+        .push("unrelated-metadata".to_owned());
+
+    let reports = crate::readiness::plan_reports(&request.targets[0].plan, &cache)?;
+    assert!(
+        reports.iter().all(crate::readiness::Report::is_ready),
+        "unrelated plan metadata must not invalidate an existing artifact"
+    );
+    let response = prepare_request(&request, &fixture.arguments(true), &cache)?;
+    assert_eq!((response.created, response.reused), (0, 1));
+    assert_eq!(
+        nix_seal_cache::Cache::open(&cache)?
+            .artifact_records()?
+            .len(),
+        1
     );
     Ok(())
 }
@@ -235,6 +269,7 @@ fn remote_request_contains_no_private_key_material_or_locations() -> TestResult 
     assert!(!wire.contains("release.signing-key"));
     assert!(!wire.contains("PRIVATE"));
     let decoded: Request = decode(wire.as_bytes())?;
+    assert_eq!(decoded.schema, "nix-seal.prepare-request.v2");
     assert_eq!(decoded.targets[0].target, fixture.target);
     assert_eq!(decoded.sources.len(), 1);
     assert_eq!(
@@ -242,6 +277,12 @@ fn remote_request_contains_no_private_key_material_or_locations() -> TestResult 
         "'/keys/a '\\''quoted'\\'' $(name)'"
     );
     Ok(())
+}
+
+#[test]
+fn legacy_preparation_response_is_rejected_before_install() {
+    let legacy = br#"{"schema":"nix-seal.prepare-response.v1","prepared":false,"reused":1,"created":0,"bundle":{"schema":"nix-seal.prepared-artifacts.v1","artifacts":[]}}"#;
+    assert!(decode::<Response>(&legacy[..]).is_err());
 }
 
 #[test]

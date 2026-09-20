@@ -174,25 +174,36 @@ does not change the credential used by the service.
 ## Cache loss, corruption, or binary-cache substitution
 
 For module-managed configurations with `flake.nixSeal.defaultConfiguration`,
-start with `nix-seal prepare --identity /private/admin.agekey --signing-key
-/private/release.key`. Add `--administrator-host admin.example` when those paths
-are on an administrator machine. Use `--flake
+start with `nix run .#nix-seal -- prepare --identity /private/admin.agekey
+--signing-key /private/release.key`. Add `--administrator-host admin.example`
+when those paths are on an administrator machine. Use `--flake
 '.#nixosConfigurations.workstation'` only for a one-off override. Review the dry
-run and repeat with `--execute`.
+run and repeat with `--execute`. The first run after upgrading to artifact v3
+must prepare each target once because v2 envelopes are intentionally not
+accepted; later changes unrelated to a selected secret reuse its verified
+artifact.
 
 The command discovers system and home targets, installs signed ciphertext as each
-cache owner, and verifies readiness. Retry the normal switch afterward. For a
-failed switch into an already built NixOS system, use `--deployment` with that
-system path to prepare its exact plans. Existing cache generations are retained.
+cache owner, and verifies readiness. Retry the normal switch afterward. Readiness
+failures from generated configurations print a copyable, flake-pinned command
+such as `nix run .#nix-seal -- prepare --flake
+'.#nixosConfigurations.workstation'`; use that command from the checkout. The
+`--deployment` option is reserved for an exact-built rollback or
+other advanced recovery where the built system path is already available.
+Existing cache generations are retained.
 
 On nix-darwin, save `darwinConfigurations.workstation` as the project default or
 use `--flake '.#darwinConfigurations.workstation'` explicitly. Activation checks
 both system and embedded home caches before preparing the nix-seal runtime. If it
-reports candidates for a different plan, prepare artifacts for the new configuration
-even if the secret values have not changed. A default-generation error shows the
-stable bare command; other generations include exact `--deployment` recovery.
-Use the executable shown there when your installed CLI is older and lacks
-`prepare`. Embedded home accounts must exist so the preflight can read each
+reports a different secret policy or missing artifact, prepare artifacts for the
+new configuration even if the secret values have not changed. A default-generation
+error shows the stable flake-pinned command for the saved default, while an explicitly
+selected configuration shows a copyable `--flake` selector. The exact
+`--deployment` form remains available for advanced recovery but is not required
+for normal preparation.
+If a machine reports an incompatible preparation worker, update nix-seal on
+both machines to the same flake revision and rerun; cache generations do not
+need to be deleted. Embedded home accounts must exist so the preflight can read each
 private cache as its owner. On a first installation, create those accounts before
 preparing and activating their home secrets.
 
@@ -211,9 +222,10 @@ For individual plans or manual approval workflows:
    `nix-seal cache export` and import with `nix-seal cache import`; import
    revalidates hashes, signatures, names, permissions, and exact bundle layout.
 4. If a binary cache or transport supplied an artifact, activation remains the
-   final authority: it verifies the plan hash, source hash, target binding,
-   recipient fingerprint, generation, expiry, and approval threshold before
-   decrypting.
+   final authority: it verifies the secret artifact-policy hash, source hash,
+   target binding, recipient fingerprint, generation, expiry, and approval
+   threshold before decrypting. The complete plan still verifies the activation
+   document's templates and service actions.
 
 ## Failed activation and rollback
 

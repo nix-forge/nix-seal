@@ -434,9 +434,7 @@ enum ArtifactCommand {
         #[arg(long, default_value_t = 1)]
         threshold: usize,
         #[arg(long)]
-        plan_hash: String,
-        #[arg(long)]
-        target_policy_hash: String,
+        artifact_policy_hash: String,
         #[arg(long)]
         source_hash: String,
         #[arg(long)]
@@ -966,6 +964,7 @@ enum CompletionShell {
 enum SchemaKind {
     Plan,
     TargetPolicy,
+    SecretArtifactPolicy,
     SecretRecipients,
     Activation,
     Collection,
@@ -1430,7 +1429,7 @@ fn run_doctor(
             }
         }
         bail!(
-            "required artifacts are not ready; run nix-seal prepare on the administrator machine before activation"
+            "required artifacts are not ready; run the flake-pinned preparation command printed by readiness from the checkout before activation"
         );
     }
 
@@ -1443,6 +1442,9 @@ fn run_schema(kind: SchemaKind) -> Result<()> {
         match kind {
             SchemaKind::Plan => nix_seal_policy::json_schema()?,
             SchemaKind::TargetPolicy => nix_seal_policy::target_policy_json_schema()?,
+            SchemaKind::SecretArtifactPolicy => {
+                nix_seal_policy::secret_artifact_policy_json_schema()?
+            }
             SchemaKind::SecretRecipients => nix_seal_policy::secret_recipients_json_schema()?,
             SchemaKind::Activation => nix_seal_runtime::activation_json_schema()?,
             SchemaKind::Collection =>
@@ -2110,8 +2112,7 @@ fn run_artifact(command: ArtifactCommand, json: bool) -> Result<()> {
             input,
             trusted_keys,
             threshold,
-            plan_hash,
-            target_policy_hash,
+            artifact_policy_hash,
             source_hash,
             artifact_hash,
             target,
@@ -2128,8 +2129,7 @@ fn run_artifact(command: ArtifactCommand, json: bool) -> Result<()> {
                 .as_secs();
             let expected = nix_seal_manifest::ExpectedBinding {
                 tool_version: env!("CARGO_PKG_VERSION"),
-                plan_hash: &plan_hash,
-                target_policy_hash: &target_policy_hash,
+                artifact_policy_hash: &artifact_policy_hash,
                 source_ciphertext_hash: &source_hash,
                 artifact_ciphertext_hash: &artifact_hash,
                 target_id: &target,
@@ -2171,6 +2171,8 @@ fn run_rekey(arguments: RekeyArgs, json: bool) -> Result<()> {
     let plan: nix_seal_core::PlanV2 = read_plan_bounded(&arguments.plan)?;
     let policy = nix_seal_policy::target_policy(&plan, &arguments.target)?;
     let target_policy_hash = nix_seal_policy::target_policy_hash(&policy)?;
+    let artifact_policy_hash =
+        nix_seal_policy::secret_artifact_policy_hash(&policy, &arguments.secret)?;
     let secret_policy = policy.secrets.get(&arguments.secret).with_context(|| {
         format!(
             "secret {} is not authorized for target {}",
@@ -2201,6 +2203,7 @@ fn run_rekey(arguments: RekeyArgs, json: bool) -> Result<()> {
         &cache,
         &policy,
         &target_policy_hash,
+        &artifact_policy_hash,
         secret_policy,
         &arguments.repository_root,
         &arguments.target,
@@ -2252,6 +2255,7 @@ fn create_target_artifact(
     cache: &nix_seal_cache::Cache,
     policy: &nix_seal_policy::TargetPolicyV1,
     target_policy_hash: &str,
+    artifact_policy_hash: &str,
     secret_policy: &nix_seal_policy::TargetSecretPolicyV1,
     repository_root: &Path,
     target: &nix_seal_core::Id,
@@ -2278,6 +2282,7 @@ fn create_target_artifact(
                 target_recipient: &policy.recipient,
                 plan_hash: &policy.plan_hash,
                 target_policy_hash,
+                artifact_policy_hash,
                 target_id: target,
                 secret_id: secret,
                 artifact_generation: generation,
@@ -2294,6 +2299,7 @@ fn create_target_artifact(
                 target_recipient: &policy.recipient,
                 plan_hash: &policy.plan_hash,
                 target_policy_hash,
+                artifact_policy_hash,
                 target_id: target,
                 secret_id: secret,
                 artifact_generation: generation,
@@ -2453,10 +2459,12 @@ fn run_provision(arguments: ProvisionArgs, json: bool) -> Result<()> {
     let cache = nix_seal_cache::Cache::open(root)?;
     let mut artifacts = Vec::with_capacity(prepared.len());
     for (secret, secret_policy, _, _) in prepared {
+        let artifact_policy_hash = nix_seal_policy::secret_artifact_policy_hash(&policy, &secret)?;
         let (result, delivery) = create_target_artifact(
             &cache,
             &policy,
             &target_policy_hash,
+            &artifact_policy_hash,
             secret_policy,
             &arguments.repository_root,
             &arguments.target,
@@ -4591,6 +4599,27 @@ fn discover_activation_artifacts(
     Ok(inspection.selected)
 }
 
+/// Extracts only the public identity fields needed to explain a rejected
+/// legacy envelope. This is diagnostic metadata, never an authorization path.
+fn legacy_artifact_diagnostic(
+    envelope: &nix_seal_manifest::SignedEnvelopeV1,
+) -> Option<(nix_seal_core::Id, nix_seal_core::Id)> {
+    if envelope.payload_type != "application/vnd.nix-seal.target-manifest.v2+json" {
+        return None;
+    }
+    let payload = BASE64_STANDARD.decode(&envelope.payload).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    let target = value
+        .get("targetId")?
+        .as_str()
+        .and_then(|value| value.parse().ok())?;
+    let secret = value
+        .get("secretId")?
+        .as_str()
+        .and_then(|value| value.parse().ok())?;
+    Some((target, secret))
+}
+
 #[allow(clippy::too_many_lines)]
 fn inspect_activation_artifacts(
     cache_root: &Path,
@@ -4605,7 +4634,6 @@ fn inspect_activation_artifacts(
         Vec::new()
     };
     let mut rejected: BTreeMap<nix_seal_core::Id, BTreeSet<String>> = BTreeMap::new();
-    let target_policy_hash = nix_seal_policy::target_policy_hash(policy)?;
     let recipient_fingerprint = nix_seal_crypto::recipient_fingerprint(&policy.recipient)?;
     let mut selected: BTreeMap<nix_seal_core::Id, DiscoveredActivationArtifact> = BTreeMap::new();
 
@@ -4616,6 +4644,18 @@ fn inspect_activation_artifacts(
             continue;
         };
         let Ok(manifest) = nix_seal_manifest::inspect_unverified(&envelope) else {
+            if let Some((target_id, secret_id)) = legacy_artifact_diagnostic(&envelope)
+                && target_id == policy.target_id
+                && policy
+                    .secrets
+                    .get(&secret_id)
+                    .is_some_and(|secret| secret.phase == phase)
+            {
+                rejected.entry(secret_id).or_default().insert(
+                    "candidate uses legacy artifact format v2; update nix-seal on both machines and rerun prepare --execute"
+                        .to_owned(),
+                );
+            }
             continue;
         };
         let Some(secret) = policy.secrets.get(&manifest.secret_id) else {
@@ -4624,10 +4664,12 @@ fn inspect_activation_artifacts(
         if secret.phase != phase || manifest.target_id != policy.target_id {
             continue;
         }
-        let reason = if manifest.plan_hash != policy.plan_hash {
-            Some("candidate refers to a different plan; prepare artifacts for this configuration")
-        } else if manifest.target_policy_hash != target_policy_hash {
-            Some("candidate refers to a different target policy")
+        let artifact_policy_hash =
+            nix_seal_policy::secret_artifact_policy_hash(policy, &manifest.secret_id)?;
+        let reason = if manifest.artifact_policy_hash != artifact_policy_hash {
+            Some(
+                "candidate refers to a different secret policy; prepare artifacts for this configuration",
+            )
         } else if manifest.source_ciphertext_hash != secret.source_ciphertext_hash {
             Some("candidate refers to different source ciphertext")
         } else if manifest.recipient_fingerprint != recipient_fingerprint {
@@ -4643,8 +4685,7 @@ fn inspect_activation_artifacts(
             continue;
         }
         let Ok(address) = nix_seal_cache::ArtifactAddress::new(
-            &policy.plan_hash,
-            &target_policy_hash,
+            &artifact_policy_hash,
             &secret.source_ciphertext_hash,
             &recipient_fingerprint,
             policy.target_id.as_str(),
@@ -4666,8 +4707,7 @@ fn inspect_activation_artifacts(
         }
         let expected = nix_seal_manifest::ExpectedBinding {
             tool_version: env!("CARGO_PKG_VERSION"),
-            plan_hash: &policy.plan_hash,
-            target_policy_hash: &target_policy_hash,
+            artifact_policy_hash: &artifact_policy_hash,
             source_ciphertext_hash: &secret.source_ciphertext_hash,
             artifact_ciphertext_hash: &record.artifact_ciphertext_hash,
             target_id: &policy.target_id,
@@ -4773,6 +4813,16 @@ fn run_activate(arguments: &ActivateArgs, json: bool) -> Result<()> {
         now,
         spec.allowed_clock_skew,
     )?;
+    let artifact_policy_hashes = policy
+        .secrets
+        .keys()
+        .map(|secret_id| {
+            Ok::<_, anyhow::Error>((
+                secret_id.clone(),
+                nix_seal_policy::secret_artifact_policy_hash(&policy, secret_id)?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
     let artifacts = spec
         .artifacts
         .iter()
@@ -4791,6 +4841,9 @@ fn run_activate(arguments: &ActivateArgs, json: bool) -> Result<()> {
                 envelope: &discovered.envelope,
                 secret_id: &artifact.secret_id,
                 source_ciphertext_hash: &secret_policy.source_ciphertext_hash,
+                artifact_policy_hash: artifact_policy_hashes
+                    .get(&artifact.secret_id)
+                    .context("artifact policy hash disappeared")?,
                 artifact_generation: discovered.generation,
                 approval_signers: &secret_policy.approval.signers,
                 approval_threshold: usize::from(secret_policy.approval.threshold),
@@ -6928,15 +6981,14 @@ fn artifact_is_active(
     envelope: &nix_seal_manifest::SignedEnvelopeV1,
     manifest: &nix_seal_manifest::TargetManifestV2,
     plan: &nix_seal_core::PlanV2,
-    plan_hash: &str,
+    _plan_hash: &str,
     repository_root: &Path,
     now: u64,
     target_policies: &mut BTreeMap<nix_seal_core::Id, nix_seal_policy::TargetPolicyV1>,
     source_hashes: &mut BTreeMap<nix_seal_core::Id, Option<String>>,
     unavailable_sources: &mut BTreeSet<nix_seal_core::Id>,
 ) -> bool {
-    if manifest.plan_hash != plan_hash
-        || !plan.targets.contains_key(&manifest.target_id)
+    if !plan.targets.contains_key(&manifest.target_id)
         || !plan.secrets.contains_key(&manifest.secret_id)
     {
         return false;
@@ -6950,13 +7002,15 @@ fn artifact_is_active(
             entry.insert(policy)
         }
     };
-    let Ok(policy_hash) = nix_seal_policy::target_policy_hash(policy) else {
-        return false;
-    };
     let Some(secret_policy) = policy.secrets.get(&manifest.secret_id) else {
         return false;
     };
-    if manifest.target_policy_hash != policy_hash {
+    let Ok(artifact_policy_hash) =
+        nix_seal_policy::secret_artifact_policy_hash(policy, &manifest.secret_id)
+    else {
+        return false;
+    };
+    if manifest.artifact_policy_hash != artifact_policy_hash {
         return false;
     }
     let source_hash = match source_hashes.entry(manifest.secret_id.clone()) {
@@ -6982,8 +7036,7 @@ fn artifact_is_active(
         return false;
     }
     let Ok(address) = nix_seal_cache::ArtifactAddress::new(
-        plan_hash,
-        &policy_hash,
+        &artifact_policy_hash,
         source_hash,
         &recipient_fingerprint,
         manifest.target_id.as_str(),
@@ -7008,8 +7061,7 @@ fn artifact_is_active(
         // The current policy has no producer-version allow-list yet. The signed
         // value remains bound by `verify`; a future version policy can constrain it.
         tool_version: &manifest.tool_version,
-        plan_hash,
-        target_policy_hash: &policy_hash,
+        artifact_policy_hash: &artifact_policy_hash,
         source_ciphertext_hash: source_hash,
         artifact_ciphertext_hash: &record.artifact_ciphertext_hash,
         target_id: &manifest.target_id,
@@ -9526,6 +9578,8 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
         std::fs::write(&plan_path, nix_seal_policy::canonical_json(&plan)?)?;
         let policy = nix_seal_policy::target_policy(&plan, &target_id)?;
         let target_policy_hash = nix_seal_policy::target_policy_hash(&policy)?;
+        let artifact_policy_hash =
+            nix_seal_policy::secret_artifact_policy_hash(&policy, &secret_id)?;
         let fingerprint = nix_seal_crypto::recipient_fingerprint(&recipient)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         let manifest = TargetManifestV2 {
@@ -9533,6 +9587,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
             tool_version: env!("CARGO_PKG_VERSION").to_owned(),
             plan_hash: policy.plan_hash.clone(),
             target_policy_hash: target_policy_hash.clone(),
+            artifact_policy_hash: artifact_policy_hash.clone(),
             source_ciphertext_hash: source_hash.clone(),
             artifact_ciphertext_hash: artifact_hash,
             target_id: target_id.clone(),
@@ -9547,8 +9602,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
             &nix_seal_manifest::sign_manifest(&manifest, &signer)?,
         )?;
         let address = nix_seal_cache::ArtifactAddress::new(
-            &policy.plan_hash,
-            &target_policy_hash,
+            &artifact_policy_hash,
             &source_hash,
             &nix_seal_crypto::recipient_fingerprint(&recipient)?,
             target_id.as_str(),
@@ -9754,6 +9808,9 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
                 target_recipient: &target_recipient,
                 plan_hash: &nix_seal_policy::plan_hash(&plan)?,
                 target_policy_hash: &nix_seal_policy::target_policy_hash(&policy)?,
+                artifact_policy_hash: &nix_seal_policy::secret_artifact_policy_hash(
+                    &policy, &secret_id,
+                )?,
                 target_id: &target_id,
                 secret_id: &secret_id,
                 artifact_generation: 1,
@@ -9781,8 +9838,8 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
             .ok_or("target missing")?
             .tags
             .push("changed".to_owned());
-        let stale = authenticated_gc_retention(&cache, &plan, &repository_root)?;
-        assert!(stale.artifact_keys.is_empty());
+        let unchanged = authenticated_gc_retention(&cache, &plan, &repository_root)?;
+        assert_eq!(unchanged.artifact_keys.len(), 1);
         Ok(())
     }
 
@@ -9796,7 +9853,6 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
             "0".repeat(64),
             "1".repeat(64),
             "2".repeat(64),
-            "3".repeat(64),
             "unrelated",
             "unrelated/secret",
             1,
@@ -9841,6 +9897,118 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
                 0,
             )?
             .is_empty()
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn legacy_artifact_reports_upgrade_path() -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let cache_root = temporary.path().join("cache");
+        let cache = nix_seal_cache::Cache::open(cache_root.clone())?;
+        let (_, recipient) = nix_seal_crypto::generate_x25519();
+        let identity_id = nix_seal_core::Id::parse("target-key")?;
+        let target_id = nix_seal_core::Id::parse("target")?;
+        let secret_id = nix_seal_core::Id::parse("application/secret")?;
+        let signer_id = nix_seal_core::Id::parse("release")?;
+        let signer = nix_seal_manifest::ApprovalSigningKey::generate()?;
+        let mut plan = nix_seal_core::PlanV2::default();
+        plan.identities.insert(
+            identity_id.clone(),
+            nix_seal_core::Identity {
+                kind: nix_seal_core::IdentityKind::Target,
+                public: recipient,
+            },
+        );
+        plan.targets.insert(
+            target_id.clone(),
+            nix_seal_core::Target {
+                kind: nix_seal_core::TargetKind::NixOs,
+                system: "x86_64-linux".to_owned(),
+                identity: identity_id,
+                username: None,
+                configuration: None,
+                environment: None,
+                tags: Vec::new(),
+                service_actions: None,
+            },
+        );
+        plan.identities.insert(
+            signer_id.clone(),
+            nix_seal_core::Identity {
+                kind: nix_seal_core::IdentityKind::Signer,
+                public: signer.encode_public()?,
+            },
+        );
+        plan.approval_policies.insert(
+            signer_id.clone(),
+            nix_seal_core::ApprovalPolicy {
+                threshold: 1,
+                signers: vec![signer_id.clone()],
+            },
+        );
+        plan.secrets.insert(
+            secret_id.clone(),
+            nix_seal_core::Secret {
+                source: "secrets/secret.age".to_owned(),
+                source_ciphertext_hash: "1".repeat(64),
+                delivery: nix_seal_core::DeliveryMode::Direct,
+                administrators: Vec::new(),
+                consumers: vec![target_id.clone()],
+                selectors: nix_seal_core::TargetSelectors::default(),
+                phase: nix_seal_core::ActivationPhase::Activation,
+                runtime: nix_seal_core::RuntimeSettings::default(),
+                runtime_overrides: BTreeMap::new(),
+                lifecycle: nix_seal_core::Lifecycle::default(),
+                approval_policy: Some(signer_id),
+                repository_only: false,
+            },
+        );
+        let policy = nix_seal_policy::target_policy(&plan, &target_id)?;
+        let payload = BASE64_STANDARD.encode(serde_json::to_vec(&serde_json::json!({
+            "schema": "nix-seal.artifact.v2",
+            "toolVersion": "0.1.0-alpha.1",
+            "planHash": "0".repeat(64),
+            "targetPolicyHash": "0".repeat(64),
+            "sourceCiphertextHash": "1".repeat(64),
+            "artifactCiphertextHash": "2".repeat(64),
+            "targetId": target_id,
+            "secretId": secret_id,
+            "recipientFingerprint": "3".repeat(64),
+            "artifactGeneration": 1,
+            "issuedAt": 1,
+            "expiresAt": null,
+            "signers": []
+        }))?);
+        let envelope = serde_json::to_vec(&serde_json::json!({
+            "payloadType": "application/vnd.nix-seal.target-manifest.v2+json",
+            "payload": payload,
+            "signatures": []
+        }))?;
+        let address = nix_seal_cache::ArtifactAddress::new(
+            "0".repeat(64),
+            "1".repeat(64),
+            "2".repeat(64),
+            "target",
+            "application/secret",
+            1,
+        )?;
+        cache.put_artifact(&address, &b"ciphertext"[..], &envelope)?;
+
+        let inspection = inspect_activation_artifacts(
+            &cache_root,
+            &policy,
+            nix_seal_core::ActivationPhase::Activation,
+            1,
+            0,
+        )?;
+        assert!(!inspection.report.is_ready());
+        assert!(
+            inspection.report.missing[0]
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("legacy artifact format v2"))
         );
         Ok(())
     }
