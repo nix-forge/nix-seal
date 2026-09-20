@@ -32,8 +32,10 @@ Run `cargo fmt --all -- --check`,
 put real secrets, private identities, prompt answers, or plaintext test fixtures
 in commits or CI.
 
-Security-critical code requires CODEOWNER review. Dependencies are reviewed one
-at a time; lockfile updates must explain security and compatibility impact.
+Security-critical code requires a documented maintainer review; seek an
+independent CODEOWNER review when another qualified owner is available.
+Dependencies are reviewed one at a time; lockfile updates must explain security
+and compatibility impact.
 `supply-chain/config.toml` is the committed cargo-vet policy. Its exemptions are
 a recorded bootstrap baseline, not an audit claim: reduce them only with a
 documented review or a trusted imported audit. Refresh imports deliberately and
