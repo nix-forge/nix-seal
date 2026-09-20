@@ -450,6 +450,11 @@ in
     '';
   deployment-readiness =
     let
+      expectedServiceExecutable =
+        if pkgs.stdenv.hostPlatform.isLinux then
+          "/run/current-system/sw/bin/systemctl"
+        else
+          "/bin/launchctl";
       integrated = configuration.extendModules {
         specialArgs = {
           configName = "fixture";
@@ -546,7 +551,8 @@ in
 
         jq -e '.schema == "nix-seal.deployment.v1" and (.targets | length) == 2' ${integrated.config.nixSeal.deploymentFile}
         home_plan=$(jq -r '.targets[] | select(.target == "home/tester/fixture") | .plan' ${integrated.config.nixSeal.deploymentFile})
-        jq -e '.targets["home/tester/fixture"].serviceActions.executable == "/run/current-system/sw/bin/systemctl"' "$home_plan"
+        jq --arg executable ${lib.escapeShellArg expectedServiceExecutable} -e \
+          '.targets["home/tester/fixture"].serviceActions.executable == $executable' "$home_plan"
         # The host may already have a private cache. Test an absent cache inside
         # the sandbox so readiness diagnoses missing artifacts, not permissions.
         jq --arg cache "$TMPDIR/empty-cache" '.artifactCacheRoot = $cache' \
