@@ -214,6 +214,17 @@ let
       }
     ];
   };
+  integratedHomeConfiguration = standaloneHomeConfiguration.extendModules {
+    specialArgs = {
+      osConfig = {
+        nixSeal = {
+          enable = true;
+          linux.volatileRuntime.enable = false;
+          darwin.volatileRuntime.enable = false;
+        };
+      };
+    };
+  };
   overrideConfiguration = inputs.nixpkgs.lib.nixosSystem {
     inherit system;
     specialArgs = {
@@ -448,7 +459,7 @@ in
           ({ lib, ... }: {
             options.home-manager.users = lib.mkOption {
               type = lib.types.attrs;
-              default.tester = standaloneHomeConfiguration.config;
+              default.tester = integratedHomeConfiguration.config;
             };
           })
         ];
@@ -508,6 +519,7 @@ in
         EOF
         chmod +x readiness-probe runuser-probe
         grep -q -- '--default-configuration' ${preflightScript}
+        grep -q -- '--configuration nixosConfigurations.fixture' ${preflightScript}
         if grep -q -- '--default-configuration' ${homePreflightScript}; then
           echo "Standalone Home Manager incorrectly claimed the flake default" >&2
           exit 1
@@ -533,6 +545,8 @@ in
         diff -u expected-home events
 
         jq -e '.schema == "nix-seal.deployment.v1" and (.targets | length) == 2' ${integrated.config.nixSeal.deploymentFile}
+        home_plan=$(jq -r '.targets[] | select(.target == "home/tester/fixture") | .plan' ${integrated.config.nixSeal.deploymentFile})
+        jq -e '.targets["home/tester/fixture"].serviceActions.executable == "/run/current-system/sw/bin/systemctl"' "$home_plan"
         # The host may already have a private cache. Test an absent cache inside
         # the sandbox so readiness diagnoses missing artifacts, not permissions.
         jq --arg cache "$TMPDIR/empty-cache" '.artifactCacheRoot = $cache' \

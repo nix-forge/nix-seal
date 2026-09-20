@@ -248,7 +248,7 @@ fn doctor_and_readiness_fail_before_preparation_and_pass_after_install() -> Test
 }
 
 #[test]
-fn readiness_failure_prints_the_exact_preparation_command() -> TestResult {
+fn readiness_failure_prints_a_copyable_flake_command() -> TestResult {
     let fixture = fixture()?;
     let deployment = deployment(&fixture)?;
     let spaced_deployment = fixture.temporary.path().join("deployment selected.json");
@@ -263,17 +263,18 @@ fn readiness_failure_prints_the_exact_preparation_command() -> TestResult {
             spec.to_str().ok_or("spec path")?,
             "--deployment",
             spaced_deployment.to_str().ok_or("deployment path")?,
+            "--configuration",
+            "nixosConfigurations.desktop",
         ],
     )?;
 
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr)?;
-    assert!(stderr.contains(&format!(
-        "'{}' prepare --deployment '{}' --identity /path/to/admin.agekey --signing-key /path/to/release.key",
-        env!("CARGO_BIN_EXE_nix-seal"),
-        spaced_deployment.display()
-    )));
-    assert!(stderr.contains("repeat with --execute"));
+    assert!(!stderr.contains("prepare --deployment"));
+    assert!(stderr.contains(
+        "nix run .#nix-seal -- prepare --flake '.#nixosConfigurations.desktop' --identity /path/to/admin.agekey --signing-key /path/to/release.key"
+    ));
+    assert!(stderr.contains("same command with --execute"));
     assert!(stderr.contains("add --administrator-host"));
     Ok(())
 }
@@ -291,16 +292,17 @@ fn readiness_for_saved_default_prints_the_stable_preparation_command() -> TestRe
             spec.to_str().ok_or("spec path")?,
             "--deployment",
             deployment.to_str().ok_or("deployment path")?,
+            "--configuration",
+            "nixosConfigurations.desktop",
             "--default-configuration",
         ],
     )?;
 
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr)?;
-    assert!(stderr.contains(&format!(
-        "'{}' prepare --identity /path/to/admin.agekey --signing-key /path/to/release.key",
-        env!("CARGO_BIN_EXE_nix-seal")
-    )));
+    assert!(stderr.contains(
+        "nix run .#nix-seal -- prepare --identity /path/to/admin.agekey --signing-key /path/to/release.key"
+    ));
     assert!(!stderr.contains("prepare --deployment"));
     Ok(())
 }
@@ -376,7 +378,9 @@ fn missing_default_lists_persistent_setup_and_explicit_candidates() -> TestResul
         stderr
             .contains("flake.nixSeal.defaultConfiguration = \"nixosConfigurations.workstation\";")
     );
-    assert!(stderr.contains("nix-seal prepare --flake '.#nixosConfigurations.desktop'"));
+    assert!(
+        stderr.contains("nix run .#nix-seal -- prepare --flake '.#nixosConfigurations.desktop'")
+    );
     Ok(())
 }
 

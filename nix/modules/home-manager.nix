@@ -123,7 +123,10 @@ in
           "persistent";
       serviceManager = if pkgs.stdenv.hostPlatform.isLinux then "systemd-user" else "launchd-user";
       serviceExecutable =
-        if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.systemd}/bin/systemctl" else "/bin/launchctl";
+        if pkgs.stdenv.hostPlatform.isLinux then
+          if integratedLinux then "/run/current-system/sw/bin/systemctl" else "${pkgs.systemd}/bin/systemctl"
+        else
+          "/bin/launchctl";
       supportsServiceCredentials = true;
       homeManagerRuntimeIdentity = true;
       serviceCredentialConfig = bindings: {
@@ -175,6 +178,10 @@ in
             ++ [
               "--deployment"
               (toString cfg.deploymentFile)
+            ]
+            ++ lib.optionals (configurationSelector != null) [
+              "--configuration"
+              configurationSelector
             ]
             ++ lib.optionals isDefaultConfiguration [ "--default-configuration" ]
           )

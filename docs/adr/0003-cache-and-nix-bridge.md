@@ -21,11 +21,14 @@ The v1 implementation streams administrator plaintext directly from the age
 decryptor into target age encryption. It copies canonical ciphertext into a
 private transaction file so its signed source hash and decrypted bytes cannot
 diverge during a concurrent source change. Target ciphertext and its signed
-manifest are committed as one directory. Cache address v2 is domain-separated
-over the cache format, plan and target-policy hashes, source ciphertext hash,
-recipient fingerprint, target and secret IDs, and artifact generation. Including
-all target-bound envelope identity fields prevents otherwise-valid targets that
-share a recipient or source from colliding on one incompatible signed envelope.
+manifest are committed as one directory. Cache address v3 is domain-separated
+over the cache format, secret-specific artifact-policy hash, source ciphertext
+hash, recipient fingerprint, target and secret IDs, and artifact generation.
+Including all target-bound envelope identity fields prevents otherwise-valid
+targets that share a recipient or source from colliding on one incompatible
+signed envelope. The complete plan and target-policy hashes remain signed
+provenance metadata rather than cache address inputs, so unrelated plan changes
+can reuse verified ciphertext.
 Existing entries are reused only after recalculating the ciphertext hash and
 verifying every signed binding. No plaintext transaction file is created.
 
@@ -86,6 +89,7 @@ failures.
 The module accepts one absolute, out-of-store `artifactCacheRoot`. It never
 imports a cache entry into a derivation and has no per-artifact address options.
 At activation the Rust runtime enumerates the root, rejects unsafe bundles, and
-selects the unique highest signed generation that exactly matches the local
-plan.v2 policy. Nix therefore never reads an identity, invokes a process, or
-rekeys in a derivation.
+selects the unique highest signed generation whose v3 artifact-policy binding
+matches the local secret policy. The activation document still exactly matches
+the complete local plan.v2 target projection. Nix therefore never reads an
+identity, invokes a process, or rekeys in a derivation.

@@ -13,13 +13,17 @@ pub(super) struct Args {
     #[arg(long, required = true)]
     pub spec: Vec<PathBuf>,
 
-    /// Deployment description to show in preparation recovery instructions.
+    /// Generated deployment description associated with the activation specs.
     #[arg(long)]
     pub deployment: Option<PathBuf>,
 
     /// The deployment is the flake's saved default; prefer stable recovery instructions.
     #[arg(long, requires = "deployment")]
     pub default_configuration: bool,
+
+    /// Public flake configuration selector for a copyable recovery command.
+    #[arg(long, requires = "deployment")]
+    pub configuration: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -72,28 +76,31 @@ impl Report {
     }
 }
 
-fn preparation_command(deployment: Option<&Path>, default_configuration: bool) -> String {
-    let executable = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("nix-seal"));
-    let executable = super::preparation::shell_quote(&executable.to_string_lossy());
-    match (deployment, default_configuration) {
-        (Some(path), false) => format!(
-            "{executable} prepare --deployment {} --identity /path/to/admin.agekey --signing-key /path/to/release.key",
-            super::preparation::shell_quote(&path.to_string_lossy())
+fn preparation_command(configuration: Option<&str>, default_configuration: bool) -> String {
+    // Use the package from the checkout that produced the configuration. A
+    // bare `nix-seal` may be an older profile entry and can prepare legacy
+    // artifacts that the current activation deliberately rejects.
+    let executable = "nix run .#nix-seal --";
+    match (configuration, default_configuration) {
+        (Some(selector), false) => format!(
+            "{executable} prepare --flake {} --identity /path/to/admin.agekey --signing-key /path/to/release.key",
+            super::preparation::shell_quote(&format!(".#{selector}"))
         ),
-        (_, true) => format!(
+        (_, true) | (None, false) => format!(
             "{executable} prepare --identity /path/to/admin.agekey --signing-key /path/to/release.key"
-        ),
-        (None, false) => format!(
-            "{executable} prepare --flake '.#<configuration>' --identity /path/to/admin.agekey --signing-key /path/to/release.key"
         ),
     }
 }
 
-fn preparation_message(deployment: Option<&Path>, default_configuration: bool) -> String {
-    format!(
-        "Prepare the artifacts required by this configuration from its flake checkout:\n  {}\nReplace the key paths and review the dry run, then repeat with --execute. If the keys are on another machine, add --administrator-host <host>. Retry the switch after preparation passes; earlier cache generations remain available for rollback.",
-        preparation_command(deployment, default_configuration)
-    )
+fn preparation_message(configuration: Option<&str>, default_configuration: bool) -> String {
+    let mut message = format!(
+        "nix-seal: preparation is required before switching; services were not stopped.\nFrom the flake checkout, run:\n  {}",
+        preparation_command(configuration, default_configuration)
+    );
+    message.push_str(
+        "\nReplace the key paths and review the dry run, then repeat the same command with --execute. If this cache was created by an older nix-seal release, the first preparation upgrades its artifacts to the current format; later unrelated plan changes reuse unaffected artifacts. If the keys are on another machine, add --administrator-host <host>; both machines must use a compatible nix-seal build. Preparation updates only the ciphertext cache; retry the switch after readiness passes. Earlier cache generations remain available for rollback. Use --deployment only for advanced exact-built recovery.",
+    );
+    message
 }
 
 pub(super) struct Inspection {
@@ -179,7 +186,7 @@ pub(super) fn run(arguments: &Args, json: bool) -> Result<()> {
             "{}",
             serde_json::json!({"schema":"nix-seal.readiness.v1", "ready":ready,
             "artifacts":reports, "errors":errors,
-            "preparationCommand": artifacts_missing.then(|| preparation_command(arguments.deployment.as_deref(), arguments.default_configuration))})
+            "preparationCommand": artifacts_missing.then(|| preparation_command(arguments.configuration.as_deref(), arguments.default_configuration))})
         );
     } else {
         for report in &reports {
@@ -199,7 +206,7 @@ pub(super) fn run(arguments: &Args, json: bool) -> Result<()> {
             eprintln!(
                 "{}",
                 preparation_message(
-                    arguments.deployment.as_deref(),
+                    arguments.configuration.as_deref(),
                     arguments.default_configuration
                 )
             );

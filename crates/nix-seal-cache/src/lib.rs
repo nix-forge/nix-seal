@@ -16,7 +16,7 @@ const MAX_ENVELOPE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TRANSFER_ENTRIES: u64 = 10_000;
 const MAX_TRANSFER_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_INVENTORY_ENVELOPE_BYTES: u64 = 64 * 1024 * 1024;
-const ARTIFACT_FORMAT: &str = "nix-seal.cache-artifact.v2";
+const ARTIFACT_FORMAT: &str = "nix-seal.cache-artifact.v3";
 const TRANSACTION_PREFIX: &str = ".nix-seal-txn-";
 
 /// Cache error that never includes cache contents.
@@ -51,10 +51,8 @@ pub enum CacheError {
 /// Deterministic public inputs to a target artifact cache address.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArtifactAddress {
-    /// Canonical plan hash.
-    pub plan_hash: String,
-    /// Deterministic target-policy projection hash.
-    pub target_policy_hash: String,
+    /// Deterministic secret-specific artifact-policy hash.
+    pub artifact_policy_hash: String,
     /// Canonical source ciphertext hash.
     pub source_ciphertext_hash: String,
     /// Normalized recipient fingerprint.
@@ -68,10 +66,9 @@ pub struct ArtifactAddress {
 }
 
 impl ArtifactAddress {
-    /// Constructs a validated v1 address.
+    /// Constructs a validated v3 address.
     pub fn new(
-        plan_hash: impl Into<String>,
-        target_policy_hash: impl Into<String>,
+        artifact_policy_hash: impl Into<String>,
         source_ciphertext_hash: impl Into<String>,
         recipient_fingerprint: impl Into<String>,
         target_id: impl Into<String>,
@@ -79,8 +76,7 @@ impl ArtifactAddress {
         artifact_generation: u64,
     ) -> Result<Self, CacheError> {
         let address = Self {
-            plan_hash: plan_hash.into(),
-            target_policy_hash: target_policy_hash.into(),
+            artifact_policy_hash: artifact_policy_hash.into(),
             source_ciphertext_hash: source_ciphertext_hash.into(),
             recipient_fingerprint: recipient_fingerprint.into(),
             target_id: target_id.into(),
@@ -95,11 +91,10 @@ impl ArtifactAddress {
     pub fn key(&self) -> Result<String, CacheError> {
         self.validate()?;
         let mut hasher = blake3::Hasher::new();
-        hasher.update(b"nix-seal.cache-address.v2\0");
+        hasher.update(b"nix-seal.cache-address.v3\0");
         for field in [
             ARTIFACT_FORMAT,
-            &self.plan_hash,
-            &self.target_policy_hash,
+            &self.artifact_policy_hash,
             &self.source_ciphertext_hash,
             &self.recipient_fingerprint,
             &self.target_id,
@@ -115,8 +110,7 @@ impl ArtifactAddress {
 
     fn validate(&self) -> Result<(), CacheError> {
         if [
-            &self.plan_hash,
-            &self.target_policy_hash,
+            &self.artifact_policy_hash,
             &self.source_ciphertext_hash,
             &self.recipient_fingerprint,
         ]
@@ -1479,7 +1473,6 @@ mod tests {
             "0".repeat(64),
             "1".repeat(64),
             "2".repeat(64),
-            "3".repeat(64),
             "host.test",
             "db/password",
             1,
@@ -1543,7 +1536,6 @@ mod tests {
             "4".repeat(64),
             "5".repeat(64),
             "6".repeat(64),
-            "7".repeat(64),
             "host.other",
             "api/token",
             2,
@@ -1694,7 +1686,6 @@ mod tests {
             "0".repeat(64),
             "1".repeat(64),
             "2".repeat(64),
-            "3".repeat(64),
             "host.test",
             "db/password",
             1,
@@ -1720,7 +1711,6 @@ mod tests {
             "0".repeat(64),
             "1".repeat(64),
             "2".repeat(64),
-            "3".repeat(64),
             "host.test",
             "db/password",
             1,
@@ -1851,7 +1841,6 @@ mod tests {
             format!("{:064x}", step + 1),
             format!("{:064x}", step + 2),
             format!("{:064x}", step + 3),
-            format!("{:064x}", step + 4),
             format!("host.{step}"),
             format!("state/secret-{step}"),
             u64::try_from(step + 1).map_err(|_| CacheError::Limit)?,

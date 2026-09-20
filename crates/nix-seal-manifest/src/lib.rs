@@ -21,9 +21,9 @@ use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
 /// Exact artifact schema accepted by this implementation.
-pub const ARTIFACT_SCHEMA: &str = "nix-seal.artifact.v2";
+pub const ARTIFACT_SCHEMA: &str = "nix-seal.artifact.v3";
 /// DSSE payload type for target manifests.
-pub const PAYLOAD_TYPE: &str = "application/vnd.nix-seal.target-manifest.v2+json";
+pub const PAYLOAD_TYPE: &str = "application/vnd.nix-seal.target-manifest.v3+json";
 /// On-disk private signing-key prefix.
 pub const PRIVATE_KEY_PREFIX: &str = "NIX-SEAL-ED25519-PRIVATE-v1:";
 /// Public verification-key prefix used in plans and files.
@@ -37,7 +37,7 @@ const MAX_AGENT_MESSAGE_BYTES: usize = 1024 * 1024;
 const AGENT_REQUEST_SIGN: u8 = 13;
 const AGENT_FAILURE: u8 = 5;
 const AGENT_SIGN_RESPONSE: u8 = 14;
-const SSH_SIGNATURE_NAMESPACE: &str = "nix-seal-artifact-v2";
+const SSH_SIGNATURE_NAMESPACE: &str = "nix-seal-artifact-v3";
 const DELEGATED_CAPABILITY_PAYLOAD_TYPE: &str =
     "application/vnd.nix-seal.delegated-create-capability.v1+json";
 const DELEGATED_CAPABILITY_SSH_NAMESPACE: &str = "nix-seal-delegated-create-capability-v1";
@@ -50,7 +50,7 @@ pub const MAX_DELEGATED_PLAINTEXT_BYTES: u64 = 65_536;
 /// Public metadata cryptographically bound to one target ciphertext.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct TargetManifestV2 {
+pub struct TargetManifestV3 {
     /// Must equal [`ARTIFACT_SCHEMA`].
     pub schema: String,
     /// Version of the tool that produced this artifact.
@@ -59,6 +59,10 @@ pub struct TargetManifestV2 {
     pub plan_hash: String,
     /// Hash of the deterministic target policy derived from that exact plan.
     pub target_policy_hash: String,
+    /// Hash of the secret-specific artifact policy required by the current
+    /// target. This is the activation binding; the two full-plan hashes above
+    /// are retained as issuance context and diagnostics.
+    pub artifact_policy_hash: String,
     /// Hash of the canonical administrator ciphertext.
     pub source_ciphertext_hash: String,
     /// Hash of the target ciphertext transported to activation.
@@ -76,6 +80,10 @@ pub struct TargetManifestV2 {
     /// Optional expiry time in Unix seconds.
     pub expires_at: Option<u64>,
 }
+
+/// Compatibility name for callers compiled against the alpha API. The wire
+/// schema is v3 and old v2 envelopes are intentionally rejected.
+pub type TargetManifestV2 = TargetManifestV3;
 
 /// One signature entry in an envelope.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -385,10 +393,8 @@ impl ApprovalSigningKey {
 pub struct ExpectedBinding<'a> {
     /// Expected producer tool version.
     pub tool_version: &'a str,
-    /// Expected plan hash.
-    pub plan_hash: &'a str,
-    /// Expected deterministic target policy hash.
-    pub target_policy_hash: &'a str,
+    /// Expected secret-specific artifact policy hash.
+    pub artifact_policy_hash: &'a str,
     /// Expected canonical source hash.
     pub source_ciphertext_hash: &'a str,
     /// Hash freshly calculated from transported artifact bytes.
@@ -977,6 +983,7 @@ fn validate_manifest_structure(manifest: &TargetManifestV2) -> Result<(), Manife
     }
     if !is_digest(&manifest.plan_hash)
         || !is_digest(&manifest.target_policy_hash)
+        || !is_digest(&manifest.artifact_policy_hash)
         || !is_digest(&manifest.source_ciphertext_hash)
         || !is_digest(&manifest.artifact_ciphertext_hash)
         || !is_digest(&manifest.recipient_fingerprint)
@@ -1009,8 +1016,7 @@ fn validate_expected(
         return Err(ManifestError::Time);
     }
     if manifest.tool_version != expected.tool_version
-        || manifest.plan_hash != expected.plan_hash
-        || manifest.target_policy_hash != expected.target_policy_hash
+        || manifest.artifact_policy_hash != expected.artifact_policy_hash
         || manifest.source_ciphertext_hash != expected.source_ciphertext_hash
         || manifest.artifact_ciphertext_hash != expected.artifact_ciphertext_hash
         || &manifest.target_id != expected.target_id
@@ -1080,6 +1086,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
             tool_version: "0.1.0-alpha.1".to_owned(),
             plan_hash: digest.clone(),
             target_policy_hash: digest.clone(),
+            artifact_policy_hash: digest.clone(),
             source_ciphertext_hash: digest.clone(),
             artifact_ciphertext_hash: digest.clone(),
             target_id: Id::parse("host.web").unwrap_or_else(|error| unreachable!("{error}")),
@@ -1094,8 +1101,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
     fn expected(manifest: &TargetManifestV2) -> ExpectedBinding<'_> {
         ExpectedBinding {
             tool_version: &manifest.tool_version,
-            plan_hash: &manifest.plan_hash,
-            target_policy_hash: &manifest.target_policy_hash,
+            artifact_policy_hash: &manifest.artifact_policy_hash,
             source_ciphertext_hash: &manifest.source_ciphertext_hash,
             artifact_ciphertext_hash: &manifest.artifact_ciphertext_hash,
             target_id: &manifest.target_id,
@@ -1491,7 +1497,7 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
 
         let different_policy_hash = "f".repeat(64);
         let mut policy_substituted = expected(&manifest);
-        policy_substituted.target_policy_hash = &different_policy_hash;
+        policy_substituted.artifact_policy_hash = &different_policy_hash;
         assert_eq!(
             verify(&envelope, &trusted, 1, &policy_substituted),
             Err(ManifestError::Binding)

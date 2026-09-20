@@ -57,8 +57,9 @@ until it has platform-specific safe ordering contracts.
 
 Nix modules emit a strict `nix-seal.activation.v2` public document containing a
 canonical plan path, target ID, ciphertext/envelope paths, source hashes, and
-runtime materialization metadata. Plan hash, target-policy hash, recipient, and
-per-secret approval keys and thresholds are not separately configurable: the
+runtime materialization metadata. Plan hash, target-policy hash,
+secret-specific artifact-policy hash, recipient, and per-secret approval keys
+and thresholds are not separately configurable: the
 Rust bridge deterministically derives them from the validated plan and rejects
 any artifact set, permissions, template declaration, or service action that
 differs from that target projection. The target identity is configured as a

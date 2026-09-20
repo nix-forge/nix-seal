@@ -28,6 +28,8 @@ fn is_sha256(value: &str) -> bool {
 pub const TARGET_POLICY_SCHEMA: &str = "nix-seal.target-policy.v1";
 /// Exact schema for one secret's canonical authoring recipient set.
 pub const SECRET_RECIPIENTS_SCHEMA: &str = "nix-seal.secret-recipients.v1";
+/// Exact schema for the policy that authorizes one target artifact.
+pub const SECRET_ARTIFACT_POLICY_SCHEMA: &str = "nix-seal.secret-artifact-policy.v1";
 
 /// Deterministic public recipients used for one canonical ciphertext source.
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
@@ -117,6 +119,32 @@ pub struct TargetSecretPolicyV1 {
     pub runtime: RuntimeSettings,
     /// Exact approval rule for this secret.
     pub approval: TargetApprovalPolicyV1,
+}
+
+/// The minimal deterministic policy projection that authorizes one target
+/// artifact. Unrelated secrets, templates, target tags, generators, and
+/// service-manager store paths are intentionally outside this projection.
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SecretArtifactPolicyV1 {
+    /// Must equal [`SECRET_ARTIFACT_POLICY_SCHEMA`].
+    pub schema: String,
+    /// Exact target bound to the artifact.
+    pub target_id: Id,
+    /// Target integration type.
+    pub target_kind: TargetKind,
+    /// Target Nix system.
+    pub system: String,
+    /// Optional target Home Manager username.
+    pub username: Option<String>,
+    /// Target identity ID containing the recipient.
+    pub recipient_identity: Id,
+    /// Exact target recipient.
+    pub recipient: String,
+    /// Secret bound to the artifact.
+    pub secret_id: Id,
+    /// Target-specific policy for this secret.
+    pub secret: TargetSecretPolicyV1,
 }
 
 /// Distinct trusted approval keys and threshold for one target artifact.
@@ -1617,6 +1645,49 @@ pub fn target_policy_hash(policy: &TargetPolicyV1) -> Result<String, PolicyError
     ))
 }
 
+/// Derives the policy projection that authorizes one target artifact.
+pub fn secret_artifact_policy(
+    policy: &TargetPolicyV1,
+    secret_id: &Id,
+) -> Result<SecretArtifactPolicyV1, PolicyError> {
+    let secret = policy.secrets.get(secret_id).ok_or_else(|| {
+        PolicyError::Violation(format!(
+            "secret artifact policy references secret {secret_id} that is not authorized for target {}",
+            policy.target_id
+        ))
+    })?;
+    Ok(SecretArtifactPolicyV1 {
+        schema: SECRET_ARTIFACT_POLICY_SCHEMA.to_owned(),
+        target_id: policy.target_id.clone(),
+        target_kind: policy.target_kind.clone(),
+        system: policy.system.clone(),
+        username: policy.username.clone(),
+        recipient_identity: policy.recipient_identity.clone(),
+        recipient: policy.recipient.clone(),
+        secret_id: secret_id.clone(),
+        secret: secret.clone(),
+    })
+}
+
+/// Returns RFC 8785 canonical bytes for one target-artifact policy.
+pub fn canonical_secret_artifact_policy_json(
+    policy: &SecretArtifactPolicyV1,
+) -> Result<Vec<u8>, PolicyError> {
+    Ok(serde_jcs::to_vec(policy)?)
+}
+
+/// Returns the BLAKE3 digest used to bind one target artifact.
+pub fn secret_artifact_policy_hash(
+    policy: &TargetPolicyV1,
+    secret_id: &Id,
+) -> Result<String, PolicyError> {
+    let policy = secret_artifact_policy(policy, secret_id)?;
+    Ok(domain_hash(
+        "nix-seal secret artifact policy hash v1",
+        &canonical_secret_artifact_policy_json(&policy)?,
+    ))
+}
+
 fn domain_hash(context: &str, bytes: &[u8]) -> String {
     let mut hasher = blake3::Hasher::new_derive_key(context);
     hasher.update(bytes);
@@ -1634,6 +1705,13 @@ pub fn json_schema() -> Result<String, PolicyError> {
 pub fn target_policy_json_schema() -> Result<String, PolicyError> {
     Ok(serde_json::to_string_pretty(&schemars::schema_for!(
         TargetPolicyV1
+    ))?)
+}
+
+/// Returns the JSON Schema for one target-artifact policy projection.
+pub fn secret_artifact_policy_json_schema() -> Result<String, PolicyError> {
+    Ok(serde_json::to_string_pretty(&schemars::schema_for!(
+        SecretArtifactPolicyV1
     ))?)
 }
 
@@ -2809,6 +2887,25 @@ mod tests {
             .approval;
         assert_eq!(approval.threshold, 1);
         assert_eq!(approval.signers.get(&signer_id), Some(&SIGNER.to_owned()));
+        let artifact_hash = secret_artifact_policy_hash(&projection, &authorized_id)?;
+        plan.targets
+            .get_mut(&target_id)
+            .ok_or_else(|| PolicyError::Violation("target missing".to_owned()))?
+            .tags
+            .push("unrelated-metadata".to_owned());
+        assert_eq!(
+            artifact_hash,
+            secret_artifact_policy_hash(&target_policy(&plan, &target_id)?, &authorized_id)?
+        );
+        plan.secrets
+            .get_mut(&authorized_id)
+            .ok_or_else(|| PolicyError::Violation("secret missing".to_owned()))?
+            .runtime
+            .mode = "0600".to_owned();
+        assert_ne!(
+            artifact_hash,
+            secret_artifact_policy_hash(&target_policy(&plan, &target_id)?, &authorized_id)?
+        );
         Ok(())
     }
 

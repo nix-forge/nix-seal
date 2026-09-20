@@ -3,24 +3,29 @@
 Status: accepted; native Ed25519, OpenSSH Ed25519, and explicit SSH-agent
 Ed25519 signing implemented
 
-Use a DSSE/in-toto-style canonical envelope and Ed25519/SSH signing. Bind plan
-and source hashes, target/secret/recipient, generation, and versions. Signing
-keys are separate from decryption keys. Default policy requires one trusted
+Use a DSSE/in-toto-style canonical envelope and Ed25519/SSH signing. Bind
+secret-artifact policy and source hashes, target/secret/recipient, generation,
+versions, and signed issuance plan context. Signing keys are separate from
+decryption keys. Default policy requires one trusted
 signature and supports N-of-M distinct signers. This authenticates the artifact,
 not repository or deployment authorization.
 
-The artifact v2 payload uses RFC 8785 canonical JSON inside the DSSE pre-
+The artifact v3 payload uses RFC 8785 canonical JSON inside the DSSE pre-
 authentication encoding. Verification is fail-closed: the caller supplies the
-expected plan and target-policy hashes, source and artifact hashes, target,
-secret, recipient, generation, tool version, and time. The target-policy hash
-binds the artifact to the exact plan-derived recipient, authorized secret set,
-per-secret approval policy, runtime permissions, templates, and service actions.
+expected secret-specific artifact-policy hash, source and artifact hashes,
+target, secret, recipient, generation, tool version, and time. The
+artifact-policy hash binds the artifact to the exact plan-derived recipient,
+selected secret policy, runtime permissions, and approval policy without
+rebinding it to unrelated secrets, templates, or service-manager paths. The
+complete plan and target-policy hashes remain signed issuance metadata and are
+still enforced by the activation document and runtime generation protocol.
+Artifact v2 envelopes remain historical and are rejected by the v3 verifier.
 Unknown and duplicate signers, non-canonical payloads, expired/future envelopes,
 threshold failures, and any binding mismatch are rejected before decryption. The
 native `nix-seal-ed25519-v1` key format remains the default. The manifest crate
 also accepts standard unencrypted OpenSSH `ssh-ed25519` private keys and public
 keys. Those approvals are encoded as standard OpenSSH `sshsig` PEM under the
-fixed `nix-seal-artifact-v2` namespace over the same DSSE pre-authenticated
+fixed `nix-seal-artifact-v3` namespace over the same DSSE pre-authenticated
 bytes. The envelope records its signature format, so a native Ed25519 signature
 can never be interpreted as an SSH signature (or vice versa). SSH public-key
 comments do not affect the approval key ID or authorization comparison. Plan
