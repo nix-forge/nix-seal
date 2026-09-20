@@ -557,7 +557,10 @@ in
           echo "readiness accepted an unprepared system" >&2
           exit 1
         fi
-        jq -e '.ready == false and (.errors | length) == 0 and (.artifacts[0].missing | length) > 0 and (.preparationCommand | contains("prepare --identity")) and (.preparationCommand | contains("--deployment") | not)' report.json
+        if ! jq -e '.ready == false and (.errors | length) == 0 and (.artifacts[0].missing | length) > 0 and (.preparationCommand | contains("prepare --identity")) and (.preparationCommand | contains("--deployment") | not)' report.json; then
+          jq . report.json >&2
+          exit 1
+        fi
         touch "$out"
       '';
   public-template-values =
