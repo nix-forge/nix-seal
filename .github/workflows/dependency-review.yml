@@ -22,7 +22,7 @@ jobs:
     name: dependency-review
     permissions:
       contents: read
-    uses: nix-forge/ci/.github/workflows/dependency-review.yml@da90bfbbb18cfa1ceb176d55d2a1c3cd3e6b1049 # v2.5.4-compatible
+    uses: nix-forge/ci/.github/workflows/dependency-review.yml@bb1b39a9082f72dc6c7ce596103ce7a5e4d29b01 # v2.8.0-compatible
     with:
       base-ref: ${{ inputs.base_ref }}
       head-ref: ${{ inputs.head_ref }}
@@ -38,4 +38,4 @@ jobs:
       actions: write # Dispatch trusted queue validation.
     steps:
       - name: Notify trusted queue reconciler
-        uses: nix-forge/ci/actions/queue-completion@da90bfbbb18cfa1ceb176d55d2a1c3cd3e6b1049 # v2.5.4-compatible
+        uses: nix-forge/ci/actions/queue-completion@bb1b39a9082f72dc6c7ce596103ce7a5e4d29b01 # v2.8.0-compatible
