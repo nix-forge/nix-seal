@@ -7,19 +7,22 @@ the builder.
 
 The release workflow pins the organization-owned
 `nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml` reusable builder to
-commit `da90bfbbb18cfa1ceb176d55d2a1c3cd3e6b1049`. The builder has read-only
+commit `bb1b39a9082f72dc6c7ce596103ce7a5e4d29b01`. The builder has read-only
 source access, no release-write permission, no long-lived signing key, and no
 shared release cache. A separate `release` environment protects publication.
 The publisher verifies every expected subject, its checksum, source commit,
 signer workflow, and builder commit before creating the GitHub Release.
+It attaches the portable `*.intoto.jsonl` bundles beside the binaries before
+making the release immutable.
 
 Verify a downloaded executable with:
 
 ```console
 gh attestation verify nix-seal-vX.Y.Z-x86_64-linux \
   --repo nix-forge/nix-seal \
+  --bundle nix-seal-vX.Y.Z-x86_64-linux.intoto.jsonl \
   --signer-workflow nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml \
-  --signer-digest da90bfbbb18cfa1ceb176d55d2a1c3cd3e6b1049
+  --signer-digest bb1b39a9082f72dc6c7ce596103ce7a5e4d29b01
 ```
 
 This is a bounded SLSA Build track claim for the named release subjects. It
