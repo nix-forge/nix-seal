@@ -34,7 +34,7 @@ gh release download vX.Y.Z --repo nix-forge/nix-seal --dir release-vX.Y.Z
 gh attestation verify release-vX.Y.Z/nix-seal-vX.Y.Z-x86_64-linux \
   --repo nix-forge/nix-seal \
   --signer-workflow nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml \
-  --signer-digest da90bfbbb18cfa1ceb176d55d2a1c3cd3e6b1049
+  --signer-digest bb1b39a9082f72dc6c7ce596103ce7a5e4d29b01
 ```
 
 The expected release identity is the `nix-forge/nix-seal` repository and the
