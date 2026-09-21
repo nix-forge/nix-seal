@@ -10,6 +10,7 @@ files.extend-exclude = [
 [default.extend-words]
 ANDed = "ANDed"
 WRONLY = "WRONLY"
+intoto = "intoto"
 
 [default.extend-identifiers]
 ANDed = "ANDed"
