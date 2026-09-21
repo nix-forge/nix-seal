@@ -28,6 +28,7 @@ permits Nix binary substitution, so its attestation alone does not establish
 where executable bytes were compiled. Define and test the trusted build or
 substitution policy, then verify downloaded release subjects before making a
 Build track claim. A local Nix build, arbitrary cache, or unrelated CI output
-has separate provenance. See the [SLSA Build specification](https://slsa.dev/spec/v1.2/)
+has separate provenance. See the
+[SLSA Build specification](https://slsa.dev/spec/v1.2/)
 and [GitHub's Level 3 guidance](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/increase-security-rating)
 for the model and verification requirements.
