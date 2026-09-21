@@ -25,17 +25,41 @@ criteria = "safe-to-deploy"
 delta = "4.6.5 -> 4.6.6"
 notes = "Reviewed the 4.6.5 to 4.6.6 facade delta: runtime library behavior is unchanged; changes are release metadata, documentation, and examples only, with no new dependencies, build script, unsafe code, or runtime capability."
 
+[[audits.clap]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "4.6.6 -> 4.6.7"
+notes = "Reviewed published archives against Cargo.lock checksums. The facade changes are documentation and examples for opt-in deferred subcommands; runtime source is unchanged. No new dependency, build script, unsafe code, or I/O capability."
+
 [[audits.clap_builder]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "4.6.5 -> 4.6.6"
 notes = "Reviewed the 4.6.5 to 4.6.6 delta: it exposes the existing override-usage value through a read-only getter and renames an internal conflicts field without changing parser behavior; no new dependencies, build script, unsafe code, or I/O capability."
 
+[[audits.clap_builder]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "4.6.6 -> 4.6.7"
+notes = "Reviewed published archives against Cargo.lock checksums. Production changes refactor type names while retaining the existing deferred-subcommand builder API and parser behavior. No new dependency, build script, unsafe code, or I/O capability."
+
 [[audits.clap_complete]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "4.6.8 -> 4.6.9"
 notes = "Reviewed the 4.6.8 to 4.6.9 delta: Bash completion generation now consistently uses the existing hyphen-normalized function name, fixing invalid function references; no new dependencies, unsafe code, build behavior, or runtime capability."
+
+[[audits.clap_complete]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "4.6.9 -> 4.6.11"
+notes = "Reviewed published archives against Cargo.lock checksums. Changes fix zsh completion value escaping, add shell detection from the caller's SHELL environment, and refactor completion dispatch. No new dependency, build script, unsafe code, process, network, or filesystem access."
+
+[[audits.clap_derive]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "4.6.4 -> 4.6.7"
+notes = "Reviewed published archives against Cargo.lock checksums. The derive macro adds opt-in boolean defer parsing and deferred subcommand generation; other edits are refactors. No new dependency, build script, unsafe code, or process, network, or filesystem access."
 
 [[audits.ed25519]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
@@ -48,6 +72,18 @@ who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "2.2.0"
 notes = "Reviewed the pinned pure-Rust signing backend and its enabled feature surface through ssh-key: no build script, no network/process/filesystem capability, and unsafe code is forbidden outside tests. This records supply-chain deployment review, not a replacement for the upstream cryptographic audit."
+
+[[audits.jiff]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "0.2.35 -> 0.2.37"
+notes = "Reviewed published archives against Cargo.lock checksums. Changes fix formatting and serialization edge cases, add compact Serde adapters and an opt-in arbitrary feature, and repair documentation include paths. Arbitrary is optional and absent from the resolved lockfile; no new mandatory dependency, build script, unsafe code, process, or network capability."
+
+[[audits.jiff-static]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "0.2.35 -> 0.2.37"
+notes = "Reviewed published archives against Cargo.lock checksums. Only release metadata and Cargo manifests change; runtime source and embedded data are byte-identical, with no new dependency, build script, unsafe code, or runtime capability."
 
 [[audits.pem-rfc7468]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
@@ -66,6 +102,12 @@ who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "3.1.0"
 notes = "Reviewed the proc-macro implementation at the pinned 3.1.0 release: compile-time token parsing only, no runtime I/O, process, network, filesystem, or unsafe-code capability in the enabled dependency surface."
+
+[[audits.rustix]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.4 -> 1.1.5"
+notes = "Reviewed published archives against Cargo.lock checksums. Changes raise MSRV from 1.63 to 1.65, fix nanosecond-to-microsecond overflow by carrying into seconds, repair target cfgs and libc compatibility, and remove the build-script probe artifact for reproducibility. No new dependencies, network or process behavior, or unsafe blocks; existing filesystem and OS syscall interfaces remain within the crate's declared purpose."
 
 [[audits.spin]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
