@@ -1,5 +1,6 @@
 # nix-seal
 
+[![OpenSSF Baseline](https://www.bestpractices.dev/projects/14636/baseline)](https://www.bestpractices.dev/en/projects/14636/baseline-2)
 [![OpenSSF Developer Best Practices](https://www.bestpractices.dev/projects/14636/badge)](https://www.bestpractices.dev/en/projects/14636/passing)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/nix-forge/nix-seal/badge)](https://scorecard.dev/viewer/?uri=github.com/nix-forge/nix-seal)
 
