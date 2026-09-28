@@ -133,6 +133,18 @@ criteria = "safe-to-deploy"
 version = "0.6.7"
 notes = "Reviewed the pinned RustCrypto SSHSIG/key crate and the enabled alloc+ed25519 features: it forbids unsafe code, has no build script, and does not enable filesystem, process, network, RSA, ECDSA, encryption, or hardware-key support."
 
+[[audits.thiserror]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "2.0.20 -> 2.0.21"
+notes = "Reviewed published crate archives against Cargo.lock checksums. Runtime source changes only the documentation URL and pairs with thiserror-impl 2.0.21. The minimum Rust version rises to 1.77; this workspace uses 1.97. No runtime capability, dependency, build-script, or unsafe-code change."
+
+[[audits.thiserror-impl]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "2.0.20 -> 2.0.21"
+notes = "Reviewed published crate archives against Cargo.lock checksums. The proc macro parser now tracks nested turbofish brackets and avoids treating their closing > as an expression boundary; new tests cover the behavior. No new runtime dependency, build script, unsafe code, or I/O capability."
+
 [[audits.toml]]
 who = "Codex review for nix-forge"
 criteria = "safe-to-deploy"
