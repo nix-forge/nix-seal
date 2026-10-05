@@ -21,7 +21,7 @@ jobs:
             system: aarch64-linux
           - name: aarch64-darwin
             system: aarch64-darwin
-    uses: nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml@bb1b39a9082f72dc6c7ce596103ce7a5e4d29b01 # v2.8.0-compatible SLSA builder
+    uses: nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml@13ad6e366ec01e317705d750fc512d33ecc15f6c # v2.8.0-compatible SLSA builder
     with:
       system: ${{ matrix.system }}
     permissions:

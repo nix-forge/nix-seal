@@ -121,7 +121,7 @@ jobs:
       - name: Test Rust build source boundaries
         run: python3 -m unittest discover -s .github/tests
       - name: Run repository hooks and publication checks
-        uses: nix-forge/ci/actions/repository-checks@bb1b39a9082f72dc6c7ce596103ce7a5e4d29b01 # v2.8.0-compatible SLSA contract
+        uses: nix-forge/ci/actions/repository-checks@13ad6e366ec01e317705d750fc512d33ecc15f6c # v2.8.0-compatible SLSA contract
         with:
           history-baseline: .gitleaks-baseline.json
   vet:
