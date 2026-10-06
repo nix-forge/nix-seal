@@ -1240,20 +1240,56 @@ fn clear_pending(root: &Path) -> Result<(), RuntimeError> {
 }
 
 fn run_post_switch(actions: &PostSwitchSpecV1) -> Result<(), RuntimeError> {
+    run_post_switch_with(actions, run_manager_action)
+}
+
+fn run_post_switch_with(
+    actions: &PostSwitchSpecV1,
+    mut run: impl FnMut(
+        &PostSwitchSpecV1,
+        &str,
+        &[String],
+    ) -> Result<std::process::ExitStatus, RuntimeError>,
+) -> Result<(), RuntimeError> {
     actions.validate()?;
     for unit in &actions.reload_units {
-        run_manager_action(
+        let status = run(
             actions,
             unit,
             &manager_arguments(actions.manager, true, unit)?,
         )?;
+        if !status.success() {
+            return Err(RuntimeError::ServiceAction(unit.clone()));
+        }
     }
     for unit in &actions.restart_units {
-        run_manager_action(
+        if matches!(
+            actions.manager,
+            ServiceManagerV1::SystemdSystem | ServiceManagerV1::SystemdUser
+        ) {
+            let mut arguments = Vec::new();
+            if actions.manager == ServiceManagerV1::SystemdUser {
+                arguments.push("--user".to_owned());
+            }
+            arguments.extend(["is-active".to_owned(), "--quiet".to_owned(), unit.clone()]);
+            let status = run(actions, unit, &arguments)?;
+            match status.code() {
+                Some(0) => {}
+                // systemctl uses 3 for inactive and 4 for unknown units. A
+                // newly declared unit is not loaded until NixOS reloads
+                // systemd later in the switch.
+                Some(3 | 4) => continue,
+                _ => return Err(RuntimeError::ServiceAction(unit.clone())),
+            }
+        }
+        let status = run(
             actions,
             unit,
             &manager_arguments(actions.manager, false, unit)?,
         )?;
+        if !status.success() {
+            return Err(RuntimeError::ServiceAction(unit.clone()));
+        }
     }
     Ok(())
 }
@@ -1298,7 +1334,7 @@ fn run_manager_action(
     actions: &PostSwitchSpecV1,
     unit: &str,
     arguments: &[String],
-) -> Result<(), RuntimeError> {
+) -> Result<std::process::ExitStatus, RuntimeError> {
     let executable = trusted_service_executable(actions, unit)?;
     let mut command = Command::new(executable);
     command
@@ -1325,8 +1361,7 @@ fn run_manager_action(
         .wait_until(deadline)
         .map_err(|_| RuntimeError::ServiceAction(unit.to_owned()))?
     {
-        Some(status) if status.success() => Ok(()),
-        Some(_) => Err(RuntimeError::ServiceAction(unit.to_owned())),
+        Some(status) => Ok(status),
         None => Err(RuntimeError::ServiceTimeout(unit.to_owned())),
     }
 }
@@ -2382,11 +2417,67 @@ fn open_regular_nofollow_handles_search_only_shared_ancestor()
 mod tests {
     use super::*;
     use nix_seal_manifest::{ARTIFACT_SCHEMA, ApprovalSigningKey, TargetManifestV2};
+    use std::os::unix::process::ExitStatusExt;
 
     const PLAN_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
     const TARGET_POLICY_HASH: &str =
         "3333333333333333333333333333333333333333333333333333333333333333";
     const SOURCE_HASH: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    #[test]
+    fn systemd_restart_skips_units_not_active_during_initial_switch() -> Result<(), RuntimeError> {
+        let actions = PostSwitchSpecV1 {
+            executable: PathBuf::from("/usr/bin/systemctl"),
+            manager: ServiceManagerV1::SystemdSystem,
+            reload_units: Vec::new(),
+            restart_units: vec!["new.service".to_owned()],
+            timeout_seconds: 30,
+        };
+        for state in [3, 4] {
+            let mut calls = Vec::new();
+            run_post_switch_with(&actions, |_, _, args| {
+                calls.push(args.to_vec());
+                Ok(std::process::ExitStatus::from_raw(state << 8))
+            })?;
+            assert_eq!(calls, [vec!["is-active", "--quiet", "new.service"]]);
+        }
+        let mut calls = Vec::new();
+        run_post_switch_with(&actions, |_, _, args| {
+            calls.push(args.to_vec());
+            Ok(std::process::ExitStatus::from_raw(0))
+        })?;
+        assert_eq!(
+            calls,
+            [
+                vec!["is-active", "--quiet", "new.service"],
+                vec!["try-restart", "new.service"],
+            ]
+        );
+        assert!(matches!(
+            run_post_switch_with(&actions, |_, _, _| Ok(std::process::ExitStatus::from_raw(1 << 8))),
+            Err(RuntimeError::ServiceAction(unit)) if unit == "new.service"
+        ));
+        let user_actions = PostSwitchSpecV1 {
+            manager: ServiceManagerV1::SystemdUser,
+            ..actions
+        };
+        let mut calls = Vec::new();
+        assert!(matches!(
+            run_post_switch_with(&user_actions, |_, _, args| {
+                calls.push(args.to_vec());
+                Ok(std::process::ExitStatus::from_raw(if calls.len() == 1 { 0 } else { 1 << 8 }))
+            }),
+            Err(RuntimeError::ServiceAction(unit)) if unit == "new.service"
+        ));
+        assert_eq!(
+            calls,
+            [
+                vec!["--user", "is-active", "--quiet", "new.service"],
+                vec!["--user", "try-restart", "new.service"],
+            ]
+        );
+        Ok(())
+    }
 
     struct Fixture {
         temporary: tempfile::TempDir,

@@ -584,6 +584,9 @@ bytes. Sources, outputs, declaration counts, and secret reads are bounded.
 Rendered files use the same owner/group/mode controls, unchanged generation
 detection, atomic switch, rollback preservation, and post-switch action protocol
 as ordinary secret files.
+On systemd, `restartUnits` restarts active units. Inactive or not-yet-loaded
+units are skipped during activation; NixOS starts newly installed units later
+in the switch.
 
 ## Compatibility symlinks
 
