@@ -13,7 +13,7 @@ WORKFLOW = Path(__file__).parents[1] / "workflows" / "release.yml"
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
-    """Reject unreviewed source and verify checksums beside downloaded artifacts."""
+    """Reject unreviewed source using the publisher's actual ancestry guard."""
 
     def setUp(self) -> None:
         self.fixture = tempfile.TemporaryDirectory()
