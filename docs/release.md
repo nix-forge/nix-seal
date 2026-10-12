@@ -5,19 +5,19 @@ Nix package natively on x86_64 Linux, aarch64 Linux, and aarch64 macOS, then
 publishes the executable, CycloneDX SBOM, SHA-256 checksums, and build metadata
 after verifying their release identity in the protected `release` environment.
 
-The build jobs call the pinned, organization-owned reusable builder in `nix-
-forge/ci`. The builder creates the executable, CycloneDX SBOM, checksum, and
-build metadata, then creates GitHub artifact attestations before upload. It does
-not receive release-write access or use a shared release cache. The publisher
-verifies every subject with that signer workflow, attaches the assets to a draft
-release, and then publishes automatically. It does not use a long-lived signing
-key or package-registry credential. The publisher requires the tagged source to
-be an ancestor of the protected default branch. Repository administrators
-restrict the `release` environment to version tags and keep tag creation
-protected. Routine releases do not require another environment approval. A 1.0
-tag additionally requires the independent security audit and all gates in
-[`SPEC.md`](../SPEC.md); those human assurance gates are intentionally not
-replaced by CI automation.
+The build jobs call the pinned, organization-owned reusable builder in
+`nix-forge/ci`. The builder creates the executable, CycloneDX SBOM, checksum,
+and build metadata, then creates GitHub artifact attestations before upload. It
+does not receive release-write access or use a shared release cache. The
+publisher verifies every subject with that signer workflow, attaches the assets
+to a draft release, and then publishes automatically. It does not use a
+long-lived signing key or package-registry credential. The publisher requires
+the tagged source to be an ancestor of the protected default branch. Repository
+administrators restrict the `release` environment to version tags and keep tag
+creation protected. Routine releases do not require another environment
+approval. A 1.0 tag additionally requires the independent security audit and all
+gates in [`SPEC.md`](../SPEC.md); those human assurance gates are intentionally
+not replaced by CI automation.
 
 Before tagging, create `docs/releases/vX.Y.Z.md` with a `## Changelog` section
 covering functional changes, security impact, affected consumers, migration

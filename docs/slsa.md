@@ -5,9 +5,9 @@ CycloneDX SBOM, checksum file, and build metadata. Each asset is created in a
 GitHub-hosted job from the immutable release tag and attested before it leaves
 the builder.
 
-The release workflow pins the organization-owned `nix-
-forge/ci/.github/workflows/slsa-nix-seal-release.yml` reusable builder to a full
-commit SHA in the released tag's workflow. The builder has read-only source
+The release workflow pins the organization-owned
+`nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml` reusable builder to a
+full commit SHA in the released tag's workflow. The builder has read-only source
 access, no release-write permission, no long-lived signing key, and no shared
 release cache. A separate `release` environment protects publication. The
 publisher verifies every expected subject, its checksum, source commit, signer
