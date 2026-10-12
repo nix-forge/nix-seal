@@ -124,6 +124,9 @@ jobs:
         uses: nix-forge/ci/actions/repository-checks@13ad6e366ec01e317705d750fc512d33ecc15f6c # v2.8.0-compatible SLSA contract
         with:
           history-baseline: .gitleaks-baseline.json
+      - name: Report formatting changes after failed hooks
+        if: failure()
+        run: git diff --stat
   vet:
     name: vet
     runs-on: ubuntu-latest
