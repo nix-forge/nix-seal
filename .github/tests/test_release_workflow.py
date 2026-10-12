@@ -20,7 +20,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.addCleanup(self.fixture.cleanup)
         self.root = Path(self.fixture.name)
 
-    def git(self, directory: Path, *arguments: str) -> str:
+    @staticmethod
+    def git(directory: Path, *arguments: str) -> str:
         return subprocess.check_output(
             ["git", "-C", str(directory), *arguments],
             text=True,
@@ -43,9 +44,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.git(self.root, "clone", "-q", str(source), str(checkout))
         return checkout, reviewed, unreviewed
 
-    def guard(self, checkout: Path, sha: str, branch: str = "main") -> int:
+    @staticmethod
+    def guard(checkout: Path, sha: str, branch: str = "main") -> int:
         block = (
-            WORKFLOW.read_text()
+            WORKFLOW
+            .read_text()
             .split(
                 "      - name: Require release source on the protected default branch\n",
                 1,
