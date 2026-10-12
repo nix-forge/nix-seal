@@ -6,23 +6,25 @@ GitHub-hosted job from the immutable release tag and attested before it leaves
 the builder.
 
 The release workflow pins the organization-owned
-`nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml` reusable builder to
-commit `bb1b39a9082f72dc6c7ce596103ce7a5e4d29b01`. The builder has read-only
-source access, no release-write permission, no long-lived signing key, and no
-shared release cache. A separate `release` environment protects publication.
-The publisher verifies every expected subject, its checksum, source commit,
-signer workflow, and builder commit before creating the GitHub Release.
-It attaches the portable `*.intoto.jsonl` bundles beside the binaries before
-making the release immutable.
+`nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml` reusable builder to a
+full commit SHA in the released tag's workflow. The builder has read-only source
+access, no release-write permission, no long-lived signing key, and no shared
+release cache. A separate `release` environment protects publication. The
+publisher verifies every expected subject, its checksum, source commit, signer
+workflow, and builder commit before creating the GitHub Release. It attaches the
+portable `*.intoto.jsonl` bundles beside the binaries before making the release
+immutable.
 
-Verify a downloaded executable with:
+Use the builder SHA from the released tag's `.github/workflows/release.yml` for
+`EXPECTED_BUILDER_COMMIT`. Verify a downloaded executable with:
 
 ```console
 gh attestation verify nix-seal-vX.Y.Z-x86_64-linux \
   --repo nix-forge/nix-seal \
   --bundle nix-seal-vX.Y.Z-x86_64-linux.intoto.jsonl \
   --signer-workflow nix-forge/ci/.github/workflows/slsa-nix-seal-release.yml \
-  --signer-digest bb1b39a9082f72dc6c7ce596103ce7a5e4d29b01
+  --signer-digest EXPECTED_BUILDER_COMMIT \
+  --source-ref refs/tags/vX.Y.Z
 ```
 
 These are release controls, not a verified Level 3 claim yet. No published

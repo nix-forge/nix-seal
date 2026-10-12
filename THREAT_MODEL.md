@@ -167,3 +167,12 @@ tags, checksums, SBOMs, and OIDC attestations bind published artifacts to a
 reviewed source commit. The public baseline policy in
 [`docs/openssf-baseline.md`](docs/openssf-baseline.md) records the review
 cadence, vulnerability response, and support controls.
+
+Routine release publication requires the tagged source to be in protected
+default-branch history, a version-tag-only release environment, and verification
+of all expected artifact subjects. The publisher derives the signer commit from
+the tagged workflow's immutable builder pin. There is no additional environment
+reviewer prompt. Protected tag creation and reviewed source are the approval
+boundary; a compromised repository administrator can still change those controls.
+The independent audit and human assurance gates for 1.0 remain required. See
+[ADR 0029](docs/adr/0029-automated-release-publication.md).
