@@ -79,11 +79,23 @@ criteria = "safe-to-deploy"
 delta = "0.2.35 -> 0.2.37"
 notes = "Reviewed published archives against Cargo.lock checksums. Changes fix formatting and serialization edge cases, add compact Serde adapters and an opt-in arbitrary feature, and repair documentation include paths. Arbitrary is optional and absent from the resolved lockfile; no new mandatory dependency, build script, unsafe code, process, or network capability."
 
+[[audits.jiff]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "0.2.37 -> 0.2.38"
+notes = "Reviewed published crate archives against Cargo.lock checksums. Runtime source is byte-identical. Changes add packaged documentation and raise the optional jiff-tzdb minimum to 0.1.9, which is absent from this workspace lockfile; the existing static companion release constraint is synchronized. No enabled dependency, feature, build script, unsafe code, or runtime capability is added."
+
 [[audits.jiff-static]]
 who = "Codex review for nix-forge"
 criteria = "safe-to-deploy"
 delta = "0.2.35 -> 0.2.37"
 notes = "Reviewed published archives against Cargo.lock checksums. Only release metadata and Cargo manifests change; runtime source and embedded data are byte-identical, with no new dependency, build script, unsafe code, or runtime capability."
+
+[[audits.jiff-static]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "0.2.37 -> 0.2.38"
+notes = "Reviewed published crate archives against Cargo.lock checksums. Runtime and proc-macro source and embedded data are byte-identical. Only crate version, VCS metadata, and the upstream development lockfile change; dependencies, features, build behavior, and capabilities are unchanged."
 
 [[audits.pem-rfc7468]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
@@ -108,6 +120,12 @@ who = "Codex review for nix-forge"
 criteria = "safe-to-deploy"
 delta = "1.1.4 -> 1.1.5"
 notes = "Reviewed published archives against Cargo.lock checksums. Changes raise MSRV from 1.63 to 1.65, fix nanosecond-to-microsecond overflow by carrying into seconds, repair target cfgs and libc compatibility, and remove the build-script probe artifact for reproducibility. No new dependencies, network or process behavior, or unsafe blocks; existing filesystem and OS syscall interfaces remain within the crate's declared purpose."
+
+[[audits.serde_spanned]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.1 -> 1.1.2"
+notes = "Reviewed published crate archives against Cargo.lock checksums. Runtime source, dependencies, and features are byte-identical. Changes anchor package include paths, update lint/release/documentation metadata, and replace the Apache license copyright placeholder with Individual contributors; license terms are unchanged. No build script, unsafe code, or runtime capability is added."
 
 [[audits.spin]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
@@ -157,8 +175,38 @@ criteria = "safe-to-deploy"
 delta = "1.1.5+spec-1.1.0 -> 1.1.6+spec-1.1.0"
 notes = "Reviewed the published crate archives against Cargo.lock checksums. The production delta only removes two key clones in the document parser by moving the owned key after preserving its span for diagnostics. Parser behavior, dependencies, build behavior, unsafe code, and runtime capabilities are unchanged."
 
+[[audits.toml]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.6+spec-1.1.0 -> 1.1.8+spec-1.1.0"
+notes = "Reviewed published crate archives against Cargo.lock checksums. Serialization now encodes struct and enum table keys using the existing TOML key writer; deserialization rejects duplicate Table keys and moves owned Value keys without changing their duplicate rejection. Unused parser span tracking is removed. Dependency constraints advance only the separately reviewed TOML companion crates; features and other runtime dependencies are unchanged. No new unsafe code, build script, or I/O capability; Apache license terms remain unchanged."
+
+[[audits.toml_datetime]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.1+spec-1.1.0 -> 1.1.2+spec-1.1.0"
+notes = "Reviewed published crate archives against Cargo.lock checksums. Runtime source, dependencies, and features are byte-identical. Changes anchor package include paths and update lint/release/documentation metadata and the Apache copyright attribution without changing license terms. No build script, unsafe code, or runtime capability is added."
+
+[[audits.toml_parser]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.3+spec-1.1.0 -> 1.1.5+spec-1.1.0"
+notes = "Reviewed published crate archives against Cargo.lock checksums. The lexer bounds its token-capacity estimate to the addressable allocation limit and divides before multiplying. Event decoding removes no-op whitespace decoding and replaces unchecked comment/newline slicing with checked access. Dependencies and features are unchanged; package/lint/license-attribution metadata changes add no build script or I/O capability."
+
+[[audits.toml_writer]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.2+spec-1.1.0 -> 1.1.3+spec-1.1.0"
+notes = "Reviewed published crate archives against Cargo.lock checksums. Runtime source, dependencies, and features are byte-identical. Changes update lint/release/documentation metadata and the Apache copyright attribution without changing license terms. No build script, unsafe code, or runtime capability is added."
+
 [[audits.yaml_serde]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.10.6 -> 0.10.7"
 notes = "Reviewed the 0.10.6 to 0.10.7 delta: production changes only preserve underlying I/O and UTF-8 errors in Error::source; remaining changes are version metadata, tests, and upstream CI action references. There are no dependency, build-script, unsafe-code, or runtime-capability additions."
+
+[[audits.zeroize]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.9.0 -> 1.9.1"
+notes = "Reviewed published crate archives against Cargo.lock checksums. Zeroizing Debug becomes opaque rather than exposing its wrapped value. Generic Vec<T> wiping now calls T::zeroize on initialized elements and wipes spare capacity before clear, rather than raw-wiping every former element representation. The consumed byte buffers remain cleared; this does not guarantee complete erasure of arbitrary element representations or prior reallocations. Existing volatile writes and allocation bounds remain. Internal optimization_barrier calls are removed; the public fallback reads MaybeUninit<u8> to avoid treating potentially uninitialized bytes as initialized u8. SIMD paths retain volatile writes. Allocator tests identify the actual registered pointer. Dependencies, features, build behavior, MSRV, and licensing are unchanged; no I/O capability is added. This is a source-delta deployment review, not an independent cryptographic audit."
