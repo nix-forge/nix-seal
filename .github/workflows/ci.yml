@@ -81,18 +81,18 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@32dec0910e46dda3568ef5a494ed5fb6a9a08f31 # v2.10.0
+        uses: nix-forge/ci/actions/setup-nix@ab8e486d3d1c48edd116578e097a46eb0c8f5097 # v2.12.0
         with:
           cache: 'false'
           cache-scope: ci-nix
       - name: Build every declared native check
-        uses: nix-forge/ci/actions/flake-checks@32dec0910e46dda3568ef5a494ed5fb6a9a08f31 # v2.10.0
+        uses: nix-forge/ci/actions/flake-checks@ab8e486d3d1c48edd116578e097a46eb0c8f5097 # v2.12.0
         with:
           system: ${{ matrix.system }}
           checks-output: ciChecks
       - name: Build portable lint checks once
         if: matrix.system == 'x86_64-linux'
-        uses: nix-forge/ci/actions/flake-checks@32dec0910e46dda3568ef5a494ed5fb6a9a08f31 # v2.10.0
+        uses: nix-forge/ci/actions/flake-checks@ab8e486d3d1c48edd116578e097a46eb0c8f5097 # v2.12.0
         with:
           system: ${{ matrix.system }}
           checks-output: lintChecks
@@ -112,12 +112,12 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@32dec0910e46dda3568ef5a494ed5fb6a9a08f31 # v2.10.0
+        uses: nix-forge/ci/actions/setup-nix@ab8e486d3d1c48edd116578e097a46eb0c8f5097 # v2.12.0
         with:
           cache: 'false'
           cache-scope: ci-tooling
       - name: Check shared workflow contracts
-        uses: nix-forge/ci/actions/validate-workflows@32dec0910e46dda3568ef5a494ed5fb6a9a08f31 # v2.10.0
+        uses: nix-forge/ci/actions/validate-workflows@ab8e486d3d1c48edd116578e097a46eb0c8f5097 # v2.12.0
       - name: Test Rust build source boundaries
         run: python3 -m unittest discover -s .github/tests
       - name: Run repository hooks and publication checks
@@ -156,12 +156,12 @@ jobs:
       - name: Select repository Rust toolchain
         run: python3 .github/scripts/ci-rust.py toolchain
       - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@32dec0910e46dda3568ef5a494ed5fb6a9a08f31 # v2.10.0
+        uses: nix-forge/ci/actions/setup-nix@ab8e486d3d1c48edd116578e097a46eb0c8f5097 # v2.12.0
         with:
           cache: 'false'
           cache-scope: ci-audit
       - name: Materialize discovered partitions
-        uses: nix-forge/ci/actions/materialize-partitions@32dec0910e46dda3568ef5a494ed5fb6a9a08f31 # v2.10.0
+        uses: nix-forge/ci/actions/materialize-partitions@ab8e486d3d1c48edd116578e097a46eb0c8f5097 # v2.12.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-audit
         run: cargo install --locked --version 0.22.2 cargo-audit
@@ -247,4 +247,4 @@ jobs:
       actions: write # Dispatch trusted queue validation.
     steps:
       - name: Notify trusted queue reconciler
-        uses: nix-forge/ci/actions/queue-completion@32dec0910e46dda3568ef5a494ed5fb6a9a08f31 # v2.10.0
+        uses: nix-forge/ci/actions/queue-completion@ab8e486d3d1c48edd116578e097a46eb0c8f5097 # v2.12.0
