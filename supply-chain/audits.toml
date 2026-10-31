@@ -61,6 +61,12 @@ criteria = "safe-to-deploy"
 delta = "4.6.4 -> 4.6.7"
 notes = "Reviewed published archives against Cargo.lock checksums. The derive macro adds opt-in boolean defer parsing and deferred subcommand generation; other edits are refactors. No new dependency, build script, unsafe code, or process, network, or filesystem access."
 
+[[audits.ctutils]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "0.4.2 -> 0.4.4"
+notes = "Reviewed published crate archives against crates.io SHA-256 checksums. Choice mask generation now routes through to_u8 and its black_box optimization barrier before wrapping negation. On32-bit targets u128 less-than combines high-half less-than, high-half equality and low-half less-than without short-circuit control flow; less-or-equal and trait comparisons delegate to that implementation. CtOption and deprecated vartime aliases preserve values while using the now-const conversion helpers. Signed integer cast replacements preserve bit representations. Boundary/property tests cover comparison values; the crate continues forbidding unsafe code. cmov requirement is unchanged, optional subtle minimum becomes2.6, MSRV becomes1.87, and licensing is unchanged. No build script or I/O capability is added. This source-delta review does not independently prove compiler-generated constant-time behavior on every target."
+
 [[audits.ed25519]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
@@ -121,11 +127,35 @@ criteria = "safe-to-deploy"
 delta = "1.1.4 -> 1.1.5"
 notes = "Reviewed published archives against Cargo.lock checksums. Changes raise MSRV from 1.63 to 1.65, fix nanosecond-to-microsecond overflow by carrying into seconds, repair target cfgs and libc compatibility, and remove the build-script probe artifact for reproducibility. No new dependencies, network or process behavior, or unsafe blocks; existing filesystem and OS syscall interfaces remain within the crate's declared purpose."
 
+[[audits.schemars]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.2.2 -> 1.2.3"
+notes = "Reviewed published crate archives against crates.io SHA-256 checksums. Runtime changes put the internally-tagged enum discriminator first while preserving its previous override semantics, and return a normal serde validation error for arbitrary-precision numbers instead of reaching unreachable!. Remaining source changes remove redundant qualifications and adjust lint allowances. The matching schemars_derive requirement advances to =1.2.3; other dependency requirements, features, MSRV and MIT licensing are unchanged. No build script, unsafe code or new I/O capability is added. Generated schema property ordering can change when preserve_order is enabled; repository schema checks remain required."
+
+[[audits.schemars_derive]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.2.2 -> 1.2.3"
+notes = "Reviewed published crate archives against crates.io SHA-256 checksums. Production changes replace redundant qualified identifiers with the same imported names and add unused_qualifications allowances on generated JsonSchema implementations; generated schema logic is unchanged. Dependency requirements, features, MSRV and MIT licensing are unchanged. The existing unsafe-code prohibition remains, and no build script, file access or process capability is added."
+
+[[audits.serde_json]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.0.151 -> 1.0.154"
+notes = "Reviewed published crate archives against crates.io SHA-256 checksums. Parser changes preserve negative zero, reject non-finite f32 narrowing results, and calculate invalid-UTF8 error positions using validated prefixes and bounded/saturating position arithmetic. Lexical math changes replace deprecated numeric constants without changing arithmetic. preserve_order now permits alloc-only use: std builds retain std RandomState; only no_std preserve_order selects newly optional foldhash with documented limited HashDoS resistance. That optional dependency is absent from the reviewed integrated lockfile, so the new hasher is not selected there. Existing build.rs is byte-identical; no new unsafe code, file/process access, or network capability is introduced. Licensing and MSRV are unchanged. Changes to number representation and diagnostics require existing canonicalization/parser tests."
+
 [[audits.serde_spanned]]
 who = "Codex review for nix-forge"
 criteria = "safe-to-deploy"
 delta = "1.1.1 -> 1.1.2"
 notes = "Reviewed published crate archives against Cargo.lock checksums. Runtime source, dependencies, and features are byte-identical. Changes anchor package include paths, update lint/release/documentation metadata, and replace the Apache license copyright placeholder with Individual contributors; license terms are unchanged. No build script, unsafe code, or runtime capability is added."
+
+[[audits.sha2]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "0.11.0 -> 0.11.1"
+notes = "Reviewed published crate archives against crates.io SHA-256 checksums. Backend refactoring replaces raw round-constant pointers with slices spanning each complete intrinsic load, preserving constant values, endian conversions, round ordering and state accumulation. X86 SHA scheduling changes from rotating locals/macros to a four-vector ring; SHA512 AVX2 groups fixed pairs while preserving the leading odd-block path. RISC-V message loading uses fixed-size chunks and from_be_bytes instead of aligned/raw assembly loaders; remaining opaque constant loads retain constant index bounds. AArch64/Wasm/X86 intrinsic loads remain bounded by fixed block/state sizes, with target-feature annotations narrowed to helpers and existing guarded dispatch. Digest output/state serialization uses exact chunks with type-fixed lengths. No new dependency, build script, I/O or network capability is added; licensing is unchanged. MSRV rises from1.85 to1.88, below the repository declared1.93 and selected1.97 toolchain. This is source-delta deployment review, not independent cryptographic or all-target runtime verification; native and forced-software known-answer testing remains required."
 
 [[audits.spin]]
 who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
