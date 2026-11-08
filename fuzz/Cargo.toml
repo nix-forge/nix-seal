@@ -63,3 +63,8 @@ bench = false
 
 [workspace]
 members = ["."]
+
+# This workspace does not inherit patches from the parent Cargo manifest.
+[patch.crates-io]
+age = { path = "../vendor/age" }
+i18n-config = { git = "https://github.com/kellpossible/cargo-i18n", rev = "2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4" }

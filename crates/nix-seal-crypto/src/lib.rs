@@ -37,6 +37,11 @@ pub enum CryptoError {
     /// Identity text was invalid or unsupported.
     #[error("invalid or unsupported age identity")]
     Identity,
+    /// RSA source migration is available only in the independent legacy build.
+    #[error(
+        "RSA migration requires the separately built nix-seal-legacy executable; encrypted SSH identities remain unsupported"
+    )]
+    LegacyRsaMigration,
     /// Encryption failed.
     #[error("age encryption failed")]
     Encrypt,
@@ -168,7 +173,7 @@ pub fn recipient_from_identity(identity: &secrecy::SecretString) -> Result<Strin
     }
     let parsed = parse_ssh_identity(identity)?;
     let recipient = age::ssh::Recipient::try_from(parsed).map_err(|_| CryptoError::Identity)?;
-    if matches!(recipient, age::ssh::Recipient::SshRsa(..)) {
+    if is_ssh_rsa_recipient(&recipient) {
         return Err(CryptoError::Identity);
     }
     Ok(recipient.to_string())
@@ -188,7 +193,43 @@ pub fn normalize_recipient(recipient: &str) -> Result<String, CryptoError> {
 /// inventory old ciphertext. It must not be used for replacement recipients
 /// or normal plan validation.
 pub fn normalize_migration_recipient(recipient: &str) -> Result<String, CryptoError> {
+    if recipient.starts_with("ssh-rsa ") {
+        return normalize_rsa_migration_recipient(recipient);
+    }
     normalize_recipient_inner(recipient, true)
+}
+
+// Wire-format inventory only: ssh-key's alloc parser does not enable its RSA
+// arithmetic feature. Keep the released age parser's modulus/exponent bounds.
+fn normalize_rsa_migration_recipient(value: &str) -> Result<String, CryptoError> {
+    let mut public = ssh_key::PublicKey::from_openssh(value).map_err(|_| CryptoError::Recipient)?;
+    let key = public.key_data().rsa().ok_or(CryptoError::Recipient)?;
+    let modulus = key.n.as_positive_bytes().ok_or(CryptoError::Recipient)?;
+    let exponent = key.e.as_positive_bytes().ok_or(CryptoError::Recipient)?;
+    let first = modulus.first().copied().ok_or(CryptoError::Recipient)?;
+    let bits = modulus
+        .len()
+        .checked_mul(8)
+        .and_then(|bits| bits.checked_sub(first.leading_zeros() as usize))
+        .ok_or(CryptoError::Recipient)?;
+    if !(2048..=4096).contains(&bits)
+        || modulus.last().is_none_or(|byte| byte & 1 == 0)
+        || exponent.len() > 8
+    {
+        return Err(CryptoError::Recipient);
+    }
+    let exponent = exponent
+        .iter()
+        .fold(0_u64, |value, byte| (value << 8) | u64::from(*byte));
+    if !(3..=(1_u64 << 33) - 1).contains(&exponent) || exponent & 1 == 0 {
+        return Err(CryptoError::Recipient);
+    }
+    public.set_comment("");
+    public.to_openssh().map_err(|_| CryptoError::Recipient)
+}
+
+fn is_ssh_rsa_recipient(recipient: &age::ssh::Recipient) -> bool {
+    recipient.to_string().starts_with("ssh-rsa ")
 }
 
 fn normalize_recipient_inner(
@@ -204,7 +245,7 @@ fn normalize_recipient_inner(
     let parsed = recipient
         .parse::<age::ssh::Recipient>()
         .map_err(|_| CryptoError::Recipient)?;
-    if !allow_legacy_ssh_rsa && matches!(parsed, age::ssh::Recipient::SshRsa(..)) {
+    if !allow_legacy_ssh_rsa && is_ssh_rsa_recipient(&parsed) {
         return Err(CryptoError::Recipient);
     }
     Ok(parsed.to_string())
@@ -356,7 +397,7 @@ fn parse_recipient(value: &str) -> Result<Box<dyn Recipient + Send>, CryptoError
     let recipient = value
         .parse::<age::ssh::Recipient>()
         .map_err(|_| CryptoError::Recipient)?;
-    if matches!(recipient, age::ssh::Recipient::SshRsa(..)) {
+    if is_ssh_rsa_recipient(&recipient) {
         return Err(CryptoError::Recipient);
     }
     Ok(Box::new(recipient))
@@ -381,7 +422,7 @@ fn parse_identity(
     }
     let recipient =
         age::ssh::Recipient::try_from(parsed.clone()).map_err(|_| CryptoError::Identity)?;
-    if matches!(recipient, age::ssh::Recipient::SshRsa(..)) {
+    if is_ssh_rsa_recipient(&recipient) {
         return Err(CryptoError::Identity);
     }
     Ok(Box::new(parsed))
@@ -400,9 +441,23 @@ fn parse_migration_identity(
     if is_plugin_identity(identity) {
         return parse_plugin_identity(identity);
     }
-    let parsed = parse_ssh_identity(identity)?;
+    let parsed = parse_ssh_identity(identity).map_err(|error| {
+        if identity
+            .expose_secret()
+            .trim_start()
+            .starts_with(concat!("-----BEGIN RSA", " PRIVATE KEY-----"))
+        {
+            CryptoError::LegacyRsaMigration
+        } else {
+            error
+        }
+    })?;
     if matches!(&parsed, age::ssh::Identity::Encrypted(_)) {
         return Err(CryptoError::Identity);
+    }
+    if matches!(&parsed, age::ssh::Identity::Unsupported(age::ssh::UnsupportedKey::Type(kind)) if kind == "ssh-rsa")
+    {
+        return Err(CryptoError::LegacyRsaMigration);
     }
     Ok(Box::new(parsed))
 }
@@ -1203,7 +1258,66 @@ QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB\n\
     }
 
     #[test]
+    fn rsa_inventory_retains_public_component_bounds() -> Result<(), Box<dyn std::error::Error>> {
+        for (bits, odd_modulus, exponent, accepted) in [
+            (2048_usize, true, 3_u64, true),
+            (4096, true, 65_537, true),
+            (2047, true, 3, false),
+            (4097, true, 3, false),
+            (2048, false, 3, false),
+            (2048, true, 1, false),
+            (2048, true, 4, false),
+            (2048, true, (1_u64 << 33) + 1, false),
+        ] {
+            let mut modulus = vec![0_u8; bits.div_ceil(8)];
+            modulus[0] = 1 << ((bits - 1) % 8);
+            let last = modulus.last_mut().ok_or("empty test modulus")?;
+            *last = if odd_modulus { 1 } else { 2 };
+            let key = ssh_key::public::KeyData::Rsa(ssh_key::public::RsaPublicKey {
+                e: ssh_key::Mpint::from_positive_bytes(&exponent.to_be_bytes())
+                    .map_err(|_| "invalid test exponent")?,
+                n: ssh_key::Mpint::from_positive_bytes(&modulus)
+                    .map_err(|_| "invalid test modulus")?,
+            });
+            let key = ssh_key::PublicKey::new(key, "public migration comment")
+                .to_openssh()
+                .map_err(|_| "invalid test public key")?;
+            let result = normalize_migration_recipient(&key);
+            assert_eq!(result.is_ok(), accepted, "invalid RSA inventory decision");
+            if let Ok(normalized) = result {
+                assert!(!normalized.contains("comment"));
+            }
+            assert!(normalize_recipient(&key).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn normal_decrypt_rejects_ciphertext_with_any_ssh_rsa_stanza() -> Result<(), CryptoError> {
+        // An independently constructed opaque RSA stanza needs no RSA arithmetic.
+        // The X25519 stanza still unwraps the real file key and verifies the MAC.
+        struct LegacyRsaStanza;
+        impl Recipient for LegacyRsaStanza {
+            fn wrap_file_key(
+                &self,
+                _: &age_core::format::FileKey,
+            ) -> Result<
+                (
+                    Vec<age_core::format::Stanza>,
+                    std::collections::HashSet<String>,
+                ),
+                age::EncryptError,
+            > {
+                Ok((
+                    vec![age_core::format::Stanza {
+                        tag: "ssh-rsa".into(),
+                        args: vec!["AAAAAA".into()],
+                        body: vec![0; 256],
+                    }],
+                    std::collections::HashSet::new(),
+                ))
+            }
+        }
         let (identity, x25519) = generate_x25519();
         let recipients: Vec<Box<dyn Recipient + Send>> = vec![
             Box::new(
@@ -1211,11 +1325,7 @@ QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB\n\
                     .parse::<age::x25519::Recipient>()
                     .map_err(|_| CryptoError::Recipient)?,
             ),
-            Box::new(
-                SSH_RSA_RECIPIENT
-                    .parse::<age::ssh::Recipient>()
-                    .map_err(|_| CryptoError::Recipient)?,
-            ),
+            Box::new(LegacyRsaStanza),
         ];
         let encryptor = Encryptor::with_recipients(
             recipients

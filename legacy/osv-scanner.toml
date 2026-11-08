@@ -1,0 +1,5 @@
+# This exception applies only to lockfiles beside this config. The independent
+# compatibility build alone enables age/ssh-rsa; normal and fuzz builds do not.
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"
+reason = "The rsa crate is used only for legacy OpenSSH RSA migration through age's optional SSH compatibility feature. nix-seal is a local offline CLI, not a network RSA service; RSA is never generated or used for new configuration. Reassess this exception on every age/rsa update and remove it before any network-facing deployment."

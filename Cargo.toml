@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/age", "legacy"]
 members = [
   "crates/nix-seal-authoring",
   "crates/nix-seal-cache",
@@ -99,3 +100,10 @@ codegen-units = 1
 strip = "symbols"
 overflow-checks = true
 panic = "abort"
+
+# Temporary reviewed recipient-surface patch and upstream parser replacement.
+# Remove after compatible upstream releases pass the documented security gates.
+# Keep the independent fuzz workspace's override in sync.
+[patch.crates-io]
+age = { path = "vendor/age" }
+i18n-config = { git = "https://github.com/kellpossible/cargo-i18n", rev = "2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4" }

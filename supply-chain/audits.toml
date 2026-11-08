@@ -2,25 +2,25 @@
 # cargo-vet audits file
 
 [[audits.base64]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.23.0 -> 0.23.1"
 notes = "Reviewed the 0.23.0 to 0.23.1 delta: production code, dependencies, build behavior, and unsafe surface are unchanged; changes only gate SIMD-specific tests correctly on supported architectures and update test metadata."
 
 [[audits.blake3]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.8.5 -> 1.8.6"
 notes = "Reviewed the 1.8.5 to 1.8.6 delta, including the build script and mmap fallback: file length is bounded before the existing unsafe map, mmap failures fall back after rewinding, hashing semantics are unchanged, and no dependency or capability is added."
 
 [[audits.blake3]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "1.8.6 -> 1.8.7"
 notes = "Reviewed the 1.8.6 to 1.8.7 delta: it replaces arrayref helpers with checked slice-to-array conversions, removes the arrayref dependency, and only adds deprecation allowances for existing CPU-feature detection. Hashing behavior, build behavior, dependencies, and the unsafe surface are otherwise unchanged."
 
 [[audits.clap]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "4.6.5 -> 4.6.6"
 notes = "Reviewed the 4.6.5 to 4.6.6 facade delta: runtime library behavior is unchanged; changes are release metadata, documentation, and examples only, with no new dependencies, build script, unsafe code, or runtime capability."
@@ -32,7 +32,7 @@ delta = "4.6.6 -> 4.6.7"
 notes = "Reviewed published archives against Cargo.lock checksums. The facade changes are documentation and examples for opt-in deferred subcommands; runtime source is unchanged. No new dependency, build script, unsafe code, or I/O capability."
 
 [[audits.clap_builder]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "4.6.5 -> 4.6.6"
 notes = "Reviewed the 4.6.5 to 4.6.6 delta: it exposes the existing override-usage value through a read-only getter and renames an internal conflicts field without changing parser behavior; no new dependencies, build script, unsafe code, or I/O capability."
@@ -44,7 +44,7 @@ delta = "4.6.6 -> 4.6.7"
 notes = "Reviewed published archives against Cargo.lock checksums. Production changes refactor type names while retaining the existing deferred-subcommand builder API and parser behavior. No new dependency, build script, unsafe code, or I/O capability."
 
 [[audits.clap_complete]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "4.6.8 -> 4.6.9"
 notes = "Reviewed the 4.6.8 to 4.6.9 delta: Bash completion generation now consistently uses the existing hyphen-normalized function name, fixing invalid function references; no new dependencies, unsafe code, build behavior, or runtime capability."
@@ -61,17 +61,29 @@ criteria = "safe-to-deploy"
 delta = "4.6.4 -> 4.6.7"
 notes = "Reviewed published archives against Cargo.lock checksums. The derive macro adds opt-in boolean defer parsing and deferred subcommand generation; other edits are refactors. No new dependency, build script, unsafe code, or process, network, or filesystem access."
 
+[[audits.ctutils]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "0.4.2 -> 0.4.4"
+notes = "Reviewed published crate archives against their Cargo.lock checksums. Choice mask conversions use the existing black_box barrier, and 32-bit u128 comparisons use explicit half-width predicates with boundary tests. Conversion methods become const and the MSRV rises to 1.87, below the workspace minimum. The optional subtle constraint rises to 2.6; enabled dependencies remain unchanged. No new unsafe code, build script, or I/O capability. This is a source-delta review for RUSTSEC-2026-0385, not an independent constant-time audit."
+
 [[audits.ed25519]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "2.2.3"
 notes = "Reviewed the pinned RustCrypto signature-trait crate and enabled source: it forbids unsafe code, has no build script or I/O capability, and provides only Ed25519 signature/key encoding and trait definitions."
 
 [[audits.ed25519-dalek]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "2.2.0"
 notes = "Reviewed the pinned pure-Rust signing backend and its enabled feature surface through ssh-key: no build script, no network/process/filesystem capability, and unsafe code is forbidden outside tests. This records supply-chain deployment review, not a replacement for the upstream cryptographic audit."
+
+[[audits.i18n-config]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "0.4.8 -> 0.4.8@git:2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4"
+notes = "Compared the published archive, verified against its registry checksum, with the pinned upstream source and workspace-inherited manifest. The three source modules add no unsafe code, build script, subprocess, network or filesystem capability. Two deserialization calls and their error payload move from basic-toml to the already reviewed toml generation; Serde models/defaults and file lookup are unchanged. Reviewed edition/MSRV, thiserror 2, derive import, error variant spelling, explicit lifetimes and documentation changes. Released age macro consumers only format these errors and use unchanged config fields. Parser acceptance expands to TOML 1.1 with bounded recursion; downstream regression tests cover age-shaped config/manifest, required fields, types, duplicate keys, malformed strings and deep nesting. This delta does not certify the published bootstrap baseline or unrelated cargo-i18n workspace packages."
 
 [[audits.jiff]]
 who = "Codex review for nix-forge"
@@ -98,19 +110,19 @@ delta = "0.2.37 -> 0.2.38"
 notes = "Reviewed published crate archives against Cargo.lock checksums. Runtime and proc-macro source and embedded data are byte-identical. Only crate version, VCS metadata, and the upstream development lockfile change; dependencies, features, build behavior, and capabilities are unchanged."
 
 [[audits.pem-rfc7468]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "0.7.0"
 notes = "Reviewed the PEM codec used only for SSHSIG/key parsing. It denies unsafe code except one UTF-8 conversion after its ASCII-only Base64 encoder; it has no build script or I/O capability."
 
 [[audits.proc-macro-error-attr3]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "3.1.0"
 notes = "Reviewed the proc-macro attribute helper at the pinned 3.1.0 release: compile-time token transformation only, no runtime I/O, process, network, filesystem, or unsafe-code capability in the enabled dependency surface."
 
 [[audits.proc-macro-error3]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "3.1.0"
 notes = "Reviewed the proc-macro implementation at the pinned 3.1.0 release: compile-time token parsing only, no runtime I/O, process, network, filesystem, or unsafe-code capability in the enabled dependency surface."
@@ -128,25 +140,25 @@ delta = "1.1.1 -> 1.1.2"
 notes = "Reviewed published crate archives against Cargo.lock checksums. Runtime source, dependencies, and features are byte-identical. Changes anchor package include paths, update lint/release/documentation metadata, and replace the Apache license copyright placeholder with Individual contributors; license terms are unchanged. No build script, unsafe code, or runtime capability is added."
 
 [[audits.spin]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.9.8 -> 0.9.9"
 notes = "Reviewed the 0.9.8 to 0.9.9 delta: the only production code change fixes Once ownership with ManuallyDrop and assume_init_read, avoiding a double-drop. No new unsafe blocks, capabilities, dependencies, build script, or network/filesystem behavior."
 
 [[audits.ssh-cipher]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "0.2.0"
 notes = "Reviewed the RustCrypto SSH cipher framing crate at the enabled dependency surface: it forbids unsafe code, has no build script or I/O capability, and operates only on caller-provided buffers."
 
 [[audits.ssh-encoding]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "0.2.0"
 notes = "Reviewed the RustCrypto RFC4251 encoding crate with alloc, PEM, Base64, and SHA-2 support only. It forbids unsafe code, has no build script or I/O capability, and parses caller-provided bytes."
 
 [[audits.ssh-key]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 version = "0.6.7"
 notes = "Reviewed the pinned RustCrypto SSHSIG/key crate and the enabled alloc+ed25519 features: it forbids unsafe code, has no build script, and does not enable filesystem, process, network, RSA, ECDSA, encryption, or hardware-key support."
@@ -200,7 +212,7 @@ delta = "1.1.2+spec-1.1.0 -> 1.1.3+spec-1.1.0"
 notes = "Reviewed published crate archives against Cargo.lock checksums. Runtime source, dependencies, and features are byte-identical. Changes update lint/release/documentation metadata and the Apache copyright attribution without changing license terms. No build script, unsafe code, or runtime capability is added."
 
 [[audits.yaml_serde]]
-who = "Ian Holloway <72767437+IanHollow@users.noreply.github.com>"
+who = "IanHollow <72767437+IanHollow@users.noreply.github.com>"
 criteria = "safe-to-deploy"
 delta = "0.10.6 -> 0.10.7"
 notes = "Reviewed the 0.10.6 to 0.10.7 delta: production changes only preserve underlying I/O and UTF-8 errors in Error::source; remaining changes are version metadata, tests, and upstream CI action references. There are no dependency, build-script, unsafe-code, or runtime-capability additions."
