@@ -1,10 +1,12 @@
 # ADR 0009: OpenSSH migration compatibility
 
-Status: accepted with a temporary upstream advisory exception
+Status: accepted; RSA exception isolated by ADR 0031
 
-`nix-seal` must migrate the existing repository's OpenSSH Ed25519 and RSA age
-ciphertext without a separate scripting runtime. The pinned `age` crate's `ssh`
-feature is therefore enabled only in `nix-seal-crypto`.
+`nix-seal` must migrate existing OpenSSH Ed25519 and RSA age ciphertext without
+a separate scripting runtime. Normal builds enable age's Ed25519 `ssh` feature.
+RSA migration is selected through the independently resolved `nix-seal-legacy`
+executable, which reuses the same CLI source and adds age's `ssh-rsa` feature.
+See [ADR 0031](0031-isolated-rsa-migration-build.md).
 
 Native X25519 age recipients and reviewed age plugins remain the default.
 OpenSSH Ed25519 remains supported for interoperability, with comments
@@ -15,10 +17,12 @@ replacement recipients and the round-trip verification identity must be
 non-RSA. The non-interactive CLI rejects encrypted OpenSSH identities instead
 of presenting a prompt or attempting agent integration.
 
-The `ssh` feature brings in RustCrypto `rsa` for legacy OpenSSH RSA support.
+Only the independent legacy workspace brings in RustCrypto `rsa`.
 That crate is subject to unfixed `RUSTSEC-2023-0071` (Marvin timing attack).
-`cargo-deny` records a narrowly scoped exception because no safe upgrade is
-available and dropping the feature would break the required migration path. The
+The legacy `cargo-deny` policy records a narrowly scoped exception because no
+safe upgrade is available and dropping migration would break compatibility.
+Normal and fuzz
+graphs must not contain RSA, and their advisory gates have no RSA exception. The
 compensating controls are:
 
 - The tool has no network listener, daemon, or remote decryption API.

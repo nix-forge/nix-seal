@@ -452,6 +452,10 @@ host cache and user artifacts only into the owning user's cache.
 
 ### Reboot and repository lifecycle
 
+On macOS, system launch daemons wait for their Nix store executable through
+`/bin/wait4path` before starting secret restoration. This also covers boots
+where launchd loads the jobs before the Nix store volume is mounted.
+
 An activated NixOS, nix-darwin, or Home Manager generation does not need the
 source repository at runtime. Its `nix-seal` executable, public plan, and
 activation specification are retained in the Nix store; the target identity and
@@ -701,7 +705,8 @@ identity files.
 Authorization IDs must be unique across identities, groups, and targets. Approval
 thresholds count distinct Ed25519 keys even when the same key is supplied in both
 native and OpenSSH formats. Normal plans and ciphertext operations reject SSH
-RSA; only explicit migration source decryption permits it.
+RSA. RSA migration requires the separate opt-in `nix-seal-legacy` executable;
+normal and fuzz builds exclude the RSA implementation entirely.
 
 Age-plugin recipients and identities use the standard age plugin protocol
 through an isolated internal worker. The worker resolves only the declared
@@ -791,12 +796,23 @@ read to another file.
 
 Set a generator's public `validation` value when its generated credential must
 be replaced after a specific non-secret configuration change. nix-seal records
-only the generator ID, output IDs, and validation value in a private local
+only the generator ID, output IDs, validation value, and output-order marker in a private local
 `.nix-seal/generator-state/v1` file. The first matching run creates the outputs;
 later matching runs are no-ops, while a changed validation value performs a
 transactional replacement. Existing outputs without this state intentionally
 require `--replace` to establish a baseline, preventing an unreviewed metadata
 file from silently rotating a credential.
+
+Older external runs with at least 11 outputs in either the secret or public
+class may have used lexical filename order instead of declaration order.
+Existing outputs without a numeric-order marker now stop with a repair
+diagnostic, including when validation is removed or the output list shrinks.
+Privately inspect previous associations and actual recipient sets before using
+`--replace`. Rotate or revoke any value that reached unintended recipients;
+re-encryption cannot revoke their earlier access. No automatic rotation occurs.
+Marked state and legacy sets with at most ten outputs in each class retain the
+existing validation behavior. State metadata is limited to 64 KiB before any
+output transaction starts.
 
 Declared external-generator prompts are non-interactive by default. Supply each
 response with
@@ -902,8 +918,11 @@ repository-relative destination, private identity, and replacement recipients
 enable a side-by-side bulk rekey; `--execute` is required before ciphertext is
 opened, and the source tree remains untouched. Without those import flags it
 never decrypts or rewrites legacy files. New plans should use native age
-recipients. Existing unencrypted OpenSSH Ed25519/RSA identities are supported
-only as a migration compatibility path; encrypted SSH private keys are
+recipients. Existing unencrypted OpenSSH Ed25519 identities remain supported.
+For RSA sources, select `nix run .#nix-seal-legacy -- migrate ...` with the same
+migration arguments. Its independent workspace, lockfile and package retain the
+existing offline-only RSA exception; normal builds neither install nor invoke
+it. Encrypted SSH private keys are
 deliberately rejected in non-interactive workflows, so convert them to a
 reviewed native-age or hardware-backed identity before automated import.
 
@@ -1066,3 +1085,11 @@ The `bash-template-writer`, `bash-template-invalid-syntax`,
 `bash-template-invalid-lint`, and `bash-runtime-activation` flake checks cover
 arguments, file layouts, non-executing validation, dry activation, and failure
 propagation. The existing runtime VM checks cover the actual module integration.
+
+## Native and cross builds
+
+Ordinary flake outputs use their native platform. `lib.packagesFor` accepts an
+explicit Linux `buildSystem` and `hostSystem`: matching architectures stay
+native, while different architectures select cross-compilation in either
+direction. Documentation-only packages run natively on the selected worker.
+CPU emulation is separate and only needed to execute foreign target programs.
