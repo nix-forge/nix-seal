@@ -74,6 +74,8 @@ struct PublicIdentityRecord {
 }
 
 const GENERATOR_STATE_SCHEMA: &str = "nix-seal.generator-state.v1";
+const GENERATOR_OUTPUT_ORDER: &str = "declaration-numeric-v1";
+const GENERATOR_STATE_MAX_BYTES: usize = 64 * 1024;
 
 /// Private, non-secret bookkeeping for explicit generator validation values.
 /// It never contains generated plaintext, identities, or recipient material.
@@ -86,6 +88,9 @@ struct GeneratorStateV1 {
     outputs: Vec<nix_seal_core::Id>,
     #[serde(default)]
     public_outputs: Vec<nix_seal_core::Id>,
+    /// Absent in legacy state whose external outputs may have been read lexically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_order: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3046,10 +3051,29 @@ fn generator_action(
     if total_present != 0 && total_present != total_outputs {
         bail!("generator {generator_id} has a partial output set; repair it with --replace");
     }
+    let state = if generator.validation.is_some() || total_present != 0 {
+        read_generator_state(repository_root, generator_id)?
+    } else {
+        None
+    };
+    let legacy_order = state
+        .as_ref()
+        .is_none_or(|state| state.output_order.is_none());
+    let external_large_outputs = !generator.executable.starts_with("builtin:")
+        && (generator.outputs.len() >= 11 || generator.public_outputs.len() >= 11);
+    // Legacy state has no executable provenance. Check its historical lists even
+    // after a declaration shrinks, changes validation, or switches to a builtin.
+    let historical_large_outputs = state
+        .as_ref()
+        .is_some_and(|state| state.outputs.len() >= 11 || state.public_outputs.len() >= 11);
+    if total_present != 0 && legacy_order && (external_large_outputs || historical_large_outputs) {
+        bail!(
+            "generator {generator_id} has existing outputs without a verified numeric-order baseline; inspect the old output associations and recipients, then pass --replace explicitly to repair them"
+        );
+    }
     let Some(validation) = generator.validation.as_deref() else {
         return Ok(GeneratorAction::Create);
     };
-    let state = read_generator_state(repository_root, generator_id)?;
     match state {
         Some(state)
             if state.validation == validation
@@ -3153,13 +3177,18 @@ fn serialize_generator_state(
     outputs: &[nix_seal_core::Id],
     public_outputs: &[nix_seal_core::Id],
 ) -> Result<Vec<u8>> {
-    Ok(serde_jcs::to_vec(&GeneratorStateV1 {
+    let bytes = serde_jcs::to_vec(&GeneratorStateV1 {
         schema: GENERATOR_STATE_SCHEMA.to_owned(),
         generator_id: generator_id.clone(),
         validation: validation.to_owned(),
         outputs: outputs.to_vec(),
         public_outputs: public_outputs.to_vec(),
-    })?)
+        output_order: Some(GENERATOR_OUTPUT_ORDER.to_owned()),
+    })?;
+    if bytes.len() > GENERATOR_STATE_MAX_BYTES {
+        bail!("generator validation state exceeds the 64 KiB safety limit");
+    }
+    Ok(bytes)
 }
 
 fn read_generator_state(
@@ -3174,16 +3203,23 @@ fn read_generator_state(
         .context("generator validation state has unsafe ownership or permissions")?;
     let mut bytes = Vec::new();
     input
-        .take(64 * 1024 + 1)
+        .take((GENERATOR_STATE_MAX_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .context("could not read generator validation state")?;
-    if bytes.len() > 64 * 1024 {
+    if bytes.len() > GENERATOR_STATE_MAX_BYTES {
         bail!("generator validation state exceeds the 64 KiB safety limit");
     }
     let state: GeneratorStateV1 =
         serde_json::from_slice(&bytes).context("generator validation state is malformed")?;
     if state.schema != GENERATOR_STATE_SCHEMA || state.generator_id != *generator_id {
         bail!("generator validation state has an incompatible schema or ID");
+    }
+    if state
+        .output_order
+        .as_deref()
+        .is_some_and(|order| order != GENERATOR_OUTPUT_ORDER)
+    {
+        bail!("generator validation state has an unsupported output ordering format");
     }
     Ok(Some(state))
 }
@@ -3644,9 +3680,15 @@ fn generate_external_values(
     if actual != expected {
         bail!("constrained generator created undeclared or missing outputs");
     }
-    let secrets = expected
-        .iter()
-        .map(|name| read_generator_output(&output_directory.join(name), generator.max_output_bytes))
+    // Filename sets validate completeness; only numeric order preserves the
+    // declaration-to-recipient association when there are more than ten outputs.
+    let secrets = (0..generator.outputs.len())
+        .map(|index| {
+            read_generator_output(
+                &output_directory.join(index.to_string()),
+                generator.max_output_bytes,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     let expected_public = generator
         .public_outputs
@@ -3673,11 +3715,10 @@ fn generate_external_values(
     if actual_public != expected_public {
         bail!("constrained generator created undeclared or missing public outputs");
     }
-    let public = expected_public
-        .iter()
-        .map(|name| {
+    let public = (0..generator.public_outputs.len())
+        .map(|index| {
             read_generator_output(
-                &public_output_directory.join(name),
+                &public_output_directory.join(index.to_string()),
                 generator.max_output_bytes,
             )
         })
@@ -8771,6 +8812,201 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
         Ok(())
     }
 
+    fn generator_state_fixture(
+        repository: &Path,
+        secret_count: usize,
+        public_count: usize,
+    ) -> Result<(nix_seal_core::PlanV2, nix_seal_core::Generator), Box<dyn std::error::Error>> {
+        fs::create_dir_all(repository.join("secrets"))?;
+        fs::create_dir_all(repository.join("public"))?;
+        let mut plan = nix_seal_core::PlanV2::default();
+        let outputs = (0..secret_count)
+            .map(|index| {
+                let id = nix_seal_core::Id::parse(format!("generated/secret-{index}"))?;
+                let source = format!("secrets/{index}.age");
+                fs::write(repository.join(&source), b"ciphertext")?;
+                plan.secrets.insert(
+                    id.clone(),
+                    serde_json::from_value(serde_json::json!({
+                        "source": source,
+                        "sourceCiphertextHash": "0".repeat(64)
+                    }))?,
+                );
+                Ok(id)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let public_outputs = (0..public_count)
+            .map(|index| {
+                let destination = format!("public/{index}");
+                fs::write(repository.join(&destination), b"public output")?;
+                Ok(nix_seal_core::GeneratorPublicOutput {
+                    id: nix_seal_core::Id::parse(format!("generated/public-{index}"))?,
+                    destination,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let generator = serde_json::from_value(serde_json::json!({
+            "executable": "/nix/store/example/bin/generator",
+            "outputs": outputs,
+            "publicOutputs": public_outputs,
+            "validation": "v1"
+        }))?;
+        Ok((plan, generator))
+    }
+
+    fn store_legacy_generator_state(
+        repository: &Path,
+        generator_id: &nix_seal_core::Id,
+        generator: &nix_seal_core::Generator,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let state = serde_json::json!({
+            "schema": "nix-seal.generator-state.v1",
+            "generatorId": generator_id,
+            "validation": "v1",
+            "outputs": generator.outputs,
+            "publicOutputs": generator.public_outputs.iter().map(|output| &output.id).collect::<Vec<_>>()
+        });
+        let path = generator_state_path(repository, generator_id)?;
+        fs::write(&path, serde_json::to_vec(&state)?)?;
+        set_private_file_handle(&fs::File::open(path)?)?;
+        Ok(())
+    }
+
+    #[test]
+    fn generator_legacy_large_output_state_requires_explicit_repair()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let generator_id = nix_seal_core::Id::parse("application/bootstrap")?;
+        for (secret_count, public_count) in [(11, 0), (0, 11), (12, 12)] {
+            let repository = tempfile::tempdir()?;
+            let (plan, generator) =
+                generator_state_fixture(repository.path(), secret_count, public_count)?;
+            store_legacy_generator_state(repository.path(), &generator_id, &generator)?;
+            assert!(
+                generator_action(&plan, &generator_id, &generator, repository.path(), false)
+                    .is_err(),
+                "unmarked legacy outputs must not be reused: {secret_count}/{public_count}"
+            );
+            let mut changed = generator.clone();
+            changed.validation = None;
+            assert!(
+                generator_action(&plan, &generator_id, &changed, repository.path(), false).is_err()
+            );
+            changed.validation = Some("v2".to_owned());
+            changed.outputs.truncate(1);
+            changed.public_outputs.truncate(1);
+            assert!(
+                generator_action(&plan, &generator_id, &changed, repository.path(), false).is_err()
+            );
+            changed.executable = "builtin:uuid".to_owned();
+            assert!(
+                generator_action(&plan, &generator_id, &changed, repository.path(), false).is_err()
+            );
+            assert_eq!(
+                generator_action(&plan, &generator_id, &generator, repository.path(), true)?,
+                GeneratorAction::Replace
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn generator_numeric_output_state_preserves_safe_reuse()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let generator_id = nix_seal_core::Id::parse("application/bootstrap")?;
+        for (secret_count, public_count) in [(11, 0), (0, 11), (10, 10)] {
+            let repository = tempfile::tempdir()?;
+            let (plan, generator) =
+                generator_state_fixture(repository.path(), secret_count, public_count)?;
+            store_legacy_generator_state(repository.path(), &generator_id, &generator)?;
+            if secret_count == 10 {
+                assert_eq!(
+                    generator_action(&plan, &generator_id, &generator, repository.path(), false)?,
+                    GeneratorAction::Unchanged
+                );
+            }
+            write_generator_state(
+                repository.path(),
+                &generator_id,
+                "v1",
+                &generator.outputs,
+                &generator
+                    .public_outputs
+                    .iter()
+                    .map(|output| output.id.clone())
+                    .collect::<Vec<_>>(),
+            )?;
+            let path = generator_state_path(repository.path(), &generator_id)?;
+            let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+            assert_eq!(state["outputOrder"], "declaration-numeric-v1");
+            assert_eq!(
+                generator_action(&plan, &generator_id, &generator, repository.path(), false)?,
+                GeneratorAction::Unchanged
+            );
+            let mut changed = generator.clone();
+            changed.validation = Some("v2".to_owned());
+            assert_eq!(
+                generator_action(&plan, &generator_id, &changed, repository.path(), false)?,
+                GeneratorAction::Replace
+            );
+            state["outputOrder"] = "unknown-future-order".into();
+            fs::write(&path, serde_json::to_vec(&state)?)?;
+            assert!(read_generator_state(repository.path(), &generator_id).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn generator_state_repair_preserves_missing_and_partial_output_rules()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let generator_id = nix_seal_core::Id::parse("application/bootstrap")?;
+        let repository = tempfile::tempdir()?;
+        let (plan, generator) = generator_state_fixture(repository.path(), 11, 0)?;
+        store_legacy_generator_state(repository.path(), &generator_id, &generator)?;
+        for index in 1..11 {
+            fs::remove_file(repository.path().join(format!("secrets/{index}.age")))?;
+        }
+        assert!(
+            generator_action(&plan, &generator_id, &generator, repository.path(), false).is_err()
+        );
+        fs::remove_file(repository.path().join("secrets/0.age"))?;
+        assert_eq!(
+            generator_action(&plan, &generator_id, &generator, repository.path(), false)?,
+            GeneratorAction::Create
+        );
+
+        let (plan, mut generator) = generator_state_fixture(repository.path(), 11, 0)?;
+        // A small historical declaration must not authorize an unmarked large
+        // external declaration merely because its fingerprint has changed.
+        generator.outputs.truncate(1);
+        store_legacy_generator_state(repository.path(), &generator_id, &generator)?;
+        generator.outputs = plan.secrets.keys().cloned().collect();
+        generator.validation = Some("v2".to_owned());
+        assert!(
+            generator_action(&plan, &generator_id, &generator, repository.path(), false).is_err()
+        );
+
+        // Builtins never used the external file-inventory ordering protocol.
+        remove_generator_state(repository.path(), &generator_id)?;
+        generator.executable = "builtin:uuid".to_owned();
+        generator.validation = None;
+        assert_eq!(
+            generator_action(&plan, &generator_id, &generator, repository.path(), false)?,
+            GeneratorAction::Create
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generator_state_rejects_oversized_metadata_before_transaction()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let generator_id = nix_seal_core::Id::parse("application/bootstrap")?;
+        let outputs = (0..5000)
+            .map(|index| nix_seal_core::Id::parse(format!("application/output-{index}")))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert!(serialize_generator_state(&generator_id, "v1", &outputs, &[]).is_err());
+        Ok(())
+    }
+
     #[test]
     fn interactive_prompt_resolution_is_explicit_and_keeps_noninteractive_runs_fail_closed()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -9009,6 +9245,63 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
         assert_eq!(values.secrets[1].expose_secret(), b"second");
         assert_eq!(values.public.len(), 1);
         assert_eq!(values.public[0].expose_secret(), b"public");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn constrained_external_generator_preserves_declared_output_order()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let shell = std::env::split_paths(&std::env::var_os("PATH").ok_or("PATH is absent")?)
+            .map(|directory| directory.join("sh"))
+            .find(|candidate| candidate.is_file())
+            .ok_or("sh is absent from PATH")?
+            .canonicalize()?;
+        for (secret_count, public_count) in [(12, 12), (0, 12), (12, 0)] {
+            let generator = nix_seal_core::Generator {
+                executable: shell.to_string_lossy().into_owned(),
+                arguments: vec![
+                    "-c".to_owned(),
+                    concat!(
+                        "i=0; while [ \"$i\" -lt \"$NIX_SEAL_OUTPUT_COUNT\" ]; do ",
+                        "printf 'secret-%s' \"$i\" > \"$NIX_SEAL_OUTPUT_DIR/$i\"; ",
+                        "i=$((i + 1)); done; ",
+                        "i=0; while [ \"$i\" -lt \"$NIX_SEAL_PUBLIC_OUTPUT_COUNT\" ]; do ",
+                        "printf 'public-%s' \"$i\" > \"$NIX_SEAL_PUBLIC_OUTPUT_DIR/$i\"; ",
+                        "i=$((i + 1)); done"
+                    )
+                    .to_owned(),
+                ],
+                runtime_inputs: Vec::new(),
+                timeout_seconds: 5,
+                max_output_bytes: 1024,
+                dependencies: Vec::new(),
+                secret_dependencies: Vec::new(),
+                outputs: (0..secret_count)
+                    .map(|index| nix_seal_core::Id::parse(format!("generator/secret-{index}")))
+                    .collect::<Result<Vec<_>, _>>()?,
+                public_outputs: (0..public_count)
+                    .map(|index| {
+                        Ok(nix_seal_core::GeneratorPublicOutput {
+                            id: nix_seal_core::Id::parse(format!("generator/public-{index}"))?,
+                            destination: format!("public/generator-{index}"),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                prompts: Vec::new(),
+                parameters: BTreeMap::new(),
+                validation: None,
+            };
+            let values = generate_external_values(&generator, &[], GeneratorSecretInputs::None)?;
+            assert_eq!(values.secrets.len(), secret_count);
+            for (index, value) in values.secrets.iter().enumerate() {
+                assert_eq!(value.expose_secret(), format!("secret-{index}").as_bytes());
+            }
+            assert_eq!(values.public.len(), public_count);
+            for (index, value) in values.public.iter().enumerate() {
+                assert_eq!(value.expose_secret(), format!("public-{index}").as_bytes());
+            }
+        }
         Ok(())
     }
 
