@@ -29,6 +29,7 @@
     inputs.flake-parts.lib.mkFlake { inherit inputs; } {
       inherit systems;
       imports = [
+        ./flake/build-platform.nix
         ./flake/ci-checks.nix
         ./flake/partitions.nix
         ./flake/production.nix

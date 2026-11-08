@@ -1,0 +1,21 @@
+let
+  names = builtins.fromJSON NAMES;
+  native = builtins.listToAttrs (
+    map (name: {
+      inherit name;
+      value = "native";
+    }) names
+  );
+  self = {
+    checks.fixture = native // {
+      pre-commit = "hooks";
+      treefmt = "formatter";
+    };
+  }
+  // result;
+  result = (import MODULE { inherit self; }).flake;
+in
+{
+  native = builtins.attrNames result.ciChecks.fixture;
+  lint = builtins.attrNames result.lintChecks.fixture;
+}

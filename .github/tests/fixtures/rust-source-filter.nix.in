@@ -1,0 +1,11 @@
+let
+  flake = builtins.getFlake (builtins.getEnv "PROJECT_FLAKE");
+  lib = flake.inputs.nixpkgs.lib;
+in
+toString (
+  import (builtins.toPath (builtins.getEnv "SOURCE_FILTER")) {
+    inherit lib;
+    legacy = builtins.getEnv "LEGACY_MODE" == "1";
+    root = /. + builtins.getEnv "TEST_REPO";
+  }
+)
