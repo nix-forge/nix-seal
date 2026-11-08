@@ -8,17 +8,19 @@ args@{
 }:
 let
   cfg = config.nixSeal;
-  configName = args.configName or null;
+  configName = args.configName or (config._module.args.configName or null);
+  hostConfigName =
+    if osConfig != null then osConfig._module.specialArgs.configName or configName else null;
   nixSealDefaultConfiguration = args.nixSealDefaultConfiguration or null;
   configurationSelector =
-    if configName == null then
-      null
-    else if osConfig != null then
+    if osConfig != null && hostConfigName != null then
       "${
         if pkgs.stdenv.hostPlatform.isDarwin then "darwinConfigurations" else "nixosConfigurations"
-      }.${configName}"
+      }.${hostConfigName}"
+    else if osConfig == null && configName != null then
+      "homeConfigurations.${configName}"
     else
-      "homeConfigurations.${configName}";
+      null;
   isDefaultConfiguration =
     configurationSelector != null && nixSealDefaultConfiguration == configurationSelector;
   inherit (import ./support.nix { inherit lib pkgs; }) groupCredentials escapeSystemdExecArgs;
@@ -35,10 +37,12 @@ let
   # macOS exposes /var as a symlink to /private/var. Keep generated secret
   # paths symlink-free so consumers using O_NOFOLLOW can validate them.
   darwinRuntimeRoot = "/private/var/run/nix-seal/users/${config.home.username}";
-  cleanupLegacyDarwinRuntime = lib.optionalString integratedDarwinVolatile ''
-    run ${lib.getExe cfg.package} __darwin-runtime cleanup-persistent \
-      --root ${lib.escapeShellArg "${config.home.homeDirectory}/Library/Caches/nix-seal"}
-  '';
+  cleanupLegacyDarwinRuntime = lib.optionalString integratedDarwinVolatile (
+    (import ../lib/render-text.nix) ./scripts/home-manager-cleanup-darwin-runtime.sh {
+      lib_getExe_cfg_package = lib.getExe cfg.package;
+      lib_escapeShellArg_config_home_homeDirectory_Library_Caches_ = lib.escapeShellArg "${config.home.homeDirectory}/Library/Caches/nix-seal";
+    }
+  );
   bootPhases = [
     "users"
     "activation"
@@ -59,23 +63,21 @@ let
         else
           lib.escapeShellArg "${config.home.homeDirectory}/Library/Caches/nix-seal${runtimeSuffix}";
     in
-    ''
-      ${lib.optionalString integratedLinux ''
-        # A boot-time Home Manager unit has no login-session environment.
-        export XDG_RUNTIME_DIR="''${XDG_RUNTIME_DIR:-/run/user/$(${pkgs.coreutils}/bin/id -u)}"
-      ''}
-      ${lib.optionalString (pkgs.stdenv.hostPlatform.isLinux && !integratedLinuxVolatile) ''
-        if [ -z "''${XDG_RUNTIME_DIR:-}" ]; then
-          echo "nix-seal: XDG_RUNTIME_DIR is required for Linux Home Manager activation" >&2
-          exit 1
-        fi
-      ''}
-      run ${lib.getExe cfg.package} activate \
-        --spec ${spec} \
-        --identity ${lib.escapeShellArg cfg.identityFile} \
-        --runtime-root ${runtimeRoot}
-      ${cleanupLegacyDarwinRuntime}
-    '';
+    (import ./../lib/render-text.nix) ./scripts/home-manager-activate.sh {
+      runtimeSetup = lib.optionalString integratedLinux (
+        (import ../lib/render-text.nix) ./scripts/home-manager-runtime-setup.sh {
+          inherit (pkgs) coreutils;
+        }
+      );
+      runtimeGuard = lib.optionalString (pkgs.stdenv.hostPlatform.isLinux && !integratedLinuxVolatile) (
+        builtins.readFile ./scripts/home-manager-runtime-guard.sh
+      );
+      lib_getExe_cfg_package = lib.getExe cfg.package;
+      inherit spec;
+      lib_escapeShellArg_cfg_identityFile = lib.escapeShellArg cfg.identityFile;
+      inherit runtimeRoot;
+      inherit cleanupLegacyDarwinRuntime;
+    };
   runtimeRootFor =
     phase:
     let
@@ -251,7 +253,9 @@ in
             name = "nix-seal-${phase}";
             value = {
               enable = true;
-              domain = lib.mkDefault "user";
+              # Aqua login loads agents in the GUI session where their consumers
+              # run. Keep this overridable for explicitly managed user domains.
+              domain = lib.mkDefault "gui";
               config = {
                 Label = "io.nix-seal.${phase}";
                 ProgramArguments = persistentActivationArguments phase;

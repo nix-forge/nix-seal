@@ -36,11 +36,13 @@ let
   ) embeddedHomeManagerUsers;
   startUserManager =
     user:
-    pkgs.writeShellScript "nix-seal-start-user-manager" ''
-      set -eu
-      uid="$(${pkgs.coreutils}/bin/id -u -- ${lib.escapeShellArg user})"
-      exec ${pkgs.systemd}/bin/systemctl start "user@$uid.service"
-    '';
+    pkgs.writeShellScript "nix-seal-start-user-manager" (
+      (import ../lib/render-text.nix) ./scripts/nix-seal-start-user-manager.sh {
+        pkgs_coreutils = pkgs.coreutils;
+        lib_escapeShellArg_user = lib.escapeShellArg user;
+        pkgs_systemd = pkgs.systemd;
+      }
+    );
   runtimeArguments =
     command: users:
     [
@@ -55,15 +57,11 @@ let
       user
     ]) users;
   prepare = lib.escapeShellArgs (runtimeArguments "prepare" embeddedHomeManagerUsers);
-  mountRuntime = ''
-    # Mounting an already mounted tmpfs hides every existing secret generation.
-    # The runtime validator below still rejects an unsafe existing mount.
-    if ! ${pkgs.util-linux}/bin/mountpoint --quiet -- ${lib.escapeShellArg cfg.linux.volatileRuntime.root}; then
-      # Stage-2 activation can precede systemd's mount-directory creation.
-      ${pkgs.coreutils}/bin/mkdir -p -- ${lib.escapeShellArg cfg.linux.volatileRuntime.root}
-      ${pkgs.util-linux}/bin/mount -- ${lib.escapeShellArg cfg.linux.volatileRuntime.root}
-    fi
-  '';
+  mountRuntime = (import ../lib/render-text.nix) ./scripts/nixos-mount-runtime.sh {
+    pkgs_util_linux = pkgs.util-linux;
+    lib_escapeShellArg_cfg_linux_volatileRuntime_root = lib.escapeShellArg cfg.linux.volatileRuntime.root;
+    pkgs_coreutils = pkgs.coreutils;
+  };
   runtimeActivation =
     (import ../lib/writers.nix { inherit (pkgs) lib; }).writeBashTemplate { inherit pkgs; }
       {
@@ -96,11 +94,13 @@ let
     )
   ) bootPhases;
   credentialId = value: builtins.head (lib.splitString ":" (toString value));
-  activate = spec: ''
-    ${lib.getExe cfg.package} activate \
-      --spec ${spec} \
-      --identity ${lib.escapeShellArg cfg.identityFile}
-  '';
+  activate =
+    spec:
+    ((import ../lib/render-text.nix) ./scripts/nixos-activate.sh {
+      lib_getExe_cfg_package = lib.getExe cfg.package;
+      inherit spec;
+      lib_escapeShellArg_cfg_identityFile = lib.escapeShellArg cfg.identityFile;
+    });
 in
 {
   imports = [
@@ -350,18 +350,15 @@ in
                 ++ lib.optionals isDefaultConfiguration [ "--default-configuration" ]
               );
             in
-            lib.optionalString (destination.specs != [ ]) ''
-              if ! ${command}; then readiness_failed=1; fi
-            '';
+            lib.optionalString (destination.specs != [ ]) (
+              (import ../lib/render-text.nix) ./scripts/nixos-check-target-readiness.sh { inherit command; }
+            );
         in
-        ''
-          readiness_failed=0
-          ${lib.concatMapStringsSep "\n" check cfg.deploymentTargets}
-          if [ "$readiness_failed" -ne 0 ]; then
-            echo "nix-seal: preparation is required before switching; services have not been stopped." >&2
-            exit 1
-          fi
-        ''
+        (import ../lib/render-text.nix) ./scripts/nixos-check-deployment-readiness.sh {
+          lib_concatMapStringsSep_n_check_cfg_deploymentTargets =
+            lib.concatMapStringsSep "\n" check
+              cfg.deploymentTargets;
+        }
       );
       system.systemBuilderCommands = lib.mkIf (cfg.deploymentTargets != [ ]) ''
         ln -s ${cfg.deploymentFile} "$out/nix-seal-deployment.json"

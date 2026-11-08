@@ -181,11 +181,15 @@ let
     inherit pkgs;
     extraSpecialArgs = {
       nixSealCatalog = scopedCatalog;
-      targetName = "fixture";
+      nixSealDefaultConfiguration = "homeConfigurations.tester@fixture";
     };
     modules = [
       self.homeManagerModules.default
       {
+        _module.args = {
+          targetName = "fixture";
+          configName = "tester@fixture";
+        };
         home.username = "tester";
         home.homeDirectory = "/home/tester";
         home.stateVersion = "26.05";
@@ -216,7 +220,11 @@ let
   };
   integratedHomeConfiguration = standaloneHomeConfiguration.extendModules {
     specialArgs = {
+      nixSealDefaultConfiguration = "${
+        if pkgs.stdenv.hostPlatform.isDarwin then "darwinConfigurations" else "nixosConfigurations"
+      }.fixture-host";
       osConfig = {
+        _module.specialArgs.configName = "fixture-host";
         nixSeal = {
           enable = true;
           linux.volatileRuntime.enable = false;
@@ -364,6 +372,28 @@ let
 
 in
 {
+  darwin-boot-readiness =
+    let
+      configurations = {
+        volatile = nativeDarwinConfiguration;
+        persistent = nativeDarwinConfiguration.extendModules {
+          modules = [ { nixSeal.darwin.volatileRuntime.enable = false; } ];
+        };
+      };
+      arguments = lib.concatMapAttrs (
+        mode: configuration:
+        lib.mapAttrs' (
+          name: daemon: lib.nameValuePair "${mode}-${name}" daemon.serviceConfig.ProgramArguments
+        ) (lib.filterAttrs (name: _: lib.hasPrefix "nix-seal-" name) configuration.config.launchd.daemons)
+      ) configurations;
+      fixture = pkgs.writeText "darwin-boot-arguments.json" (
+        builtins.unsafeDiscardStringContext (builtins.toJSON arguments)
+      );
+    in
+    pkgs.runCommand "nix-seal-darwin-boot-readiness" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+      python3 ${./scripts/check_darwin_boot.py} ${fixture}
+      touch "$out"
+    '';
   darwin-deployment-readiness =
     let
       integrated = nativeDarwinConfiguration.extendModules {
@@ -391,63 +421,26 @@ in
             configuration.config.system.activationScripts.preActivation.text
         );
     in
-    pkgs.runCommand "nix-seal-darwin-deployment-readiness" { } ''
-      cat > nix-seal <<'EOF'
-      #!${pkgs.runtimeShell}
-      if [ "$1" = readiness ]; then
-        case " $* " in
-          *" --deployment "*) ;;
-          *) exit 2 ;;
-        esac
-        echo "check:''${TEST_OWNER:-root}" >> "$PWD/events"
-        if [ "''${TEST_OWNER:-root}" = "$FAIL_OWNER" ]; then
-          echo "target-local cache lacks verified artifacts" >&2
-          exit 1
-        fi
-      else
-        echo runtime >> "$PWD/events"
-      fi
-      EOF
-      cat > sudo <<'EOF'
-      #!${pkgs.runtimeShell}
-      test "$1" = -H && test "$2" = -u && test "$4" = -- || exit 2
-      export TEST_OWNER="$3"
-      shift 4
-      exec "$@"
-      EOF
-      chmod +x nix-seal sudo
-      export FAIL_OWNER=root
-      if ${pkgs.runtimeShell} ${pkgs.writeText "darwin-preactivation" (script integrated)} 2> error; then
-        echo "Darwin accepted missing system artifacts" >&2
-        exit 1
-      fi
-      grep -q 'target-local cache lacks verified artifacts' error
-      printf 'check:root\ncheck:tester\n' > expected
-      diff -u expected events
-      export FAIL_OWNER=tester
-      : > events
-      if ${pkgs.runtimeShell} ${pkgs.writeText "darwin-preactivation" (script integrated)} 2> error; then
-        echo "Darwin accepted missing home artifacts" >&2
-        exit 1
-      fi
-      diff -u expected events
-      export FAIL_OWNER=none
-      : > events
-      ${pkgs.runtimeShell} ${pkgs.writeText "darwin-preactivation" (script integrated)}
-      printf 'runtime\n' >> expected
-      diff -u expected events
-      export FAIL_OWNER=tester
-      for script in ${pkgs.writeText "darwin-persistent-preactivation" (script persistent)} ${pkgs.writeText "darwin-home-only-preactivation" (script homeOnly)}; do
-        : > events
-        if ${pkgs.runtimeShell} "$script" 2> error; then
-          echo "Darwin skipped readiness without a system volatile runtime" >&2
-          exit 1
-        fi
-        grep -q 'check:tester' events
-        if grep -q runtime events; then exit 1; fi
-      done
-      touch "$out"
-    '';
+    pkgs.runCommand "nix-seal-darwin-deployment-readiness" { } (
+      (import ../lib/render-text.nix) ./scripts/check-darwin-deployment-readiness.sh {
+        pkgs_runtimeShell = pkgs.runtimeShell;
+        pkgs_writeText_darwin_preactivation_script_integrated = pkgs.writeText "darwin-preactivation" (
+          script integrated
+        );
+        pkgs_writeText_darwin_persistent_preactivation_script_persis = pkgs.writeText "darwin-persistent-preactivation" (
+          script persistent
+        );
+        pkgs_writeText_darwin_home_only_preactivation_script_homeOnly = pkgs.writeText "darwin-home-only-preactivation" (
+          script homeOnly
+        );
+        sudoFixture = pkgs.replaceVars ./scripts/sudo-fixture.sh.in {
+          pkgs_runtimeShell = pkgs.runtimeShell;
+        };
+        nix_sealFixture = pkgs.replaceVars ./scripts/nix-seal-fixture.sh.in {
+          pkgs_runtimeShell = pkgs.runtimeShell;
+        };
+      }
+    );
   deployment-readiness =
     let
       expectedServiceExecutable =
@@ -479,12 +472,15 @@ in
             preflight
         )
       );
+      nonDefaultHome = standaloneHomeConfiguration.extendModules {
+        specialArgs.nixSealDefaultConfiguration = "nixosConfigurations.fixture";
+      };
       homePreflightScript = pkgs.writeText "home-readiness-preflight" (
         builtins.unsafeDiscardStringContext (
           lib.replaceStrings
-            [ (lib.getExe standaloneHomeConfiguration.config.nixSeal.package) ]
+            [ (lib.getExe nonDefaultHome.config.nixSeal.package) ]
             [ ''"$PWD/readiness-probe"'' ]
-            standaloneHomeConfiguration.config.home.activation.nixSealReadiness.data
+            nonDefaultHome.config.home.activation.nixSealReadiness.data
         )
       );
     in
@@ -504,71 +500,24 @@ in
           pkgs.jq
         ];
       }
-      ''
-        cat > readiness-probe <<'EOF'
-        #!${pkgs.runtimeShell}
-        test "$1" = readiness && test "$2" = --spec && test -n "$3" || exit 2
-        case " $* " in
-          *" --deployment "*) ;;
-          *) exit 2 ;;
-        esac
-        echo "''${TEST_OWNER:-root}" >> "$PWD/events"
-        test "''${TEST_OWNER:-root}" != "$FAIL_OWNER"
-        EOF
-        cat > runuser-probe <<'EOF'
-        #!${pkgs.runtimeShell}
-        test "$1" = --user && test "$2" = tester && test "$3" = -- || exit 2
-        export TEST_OWNER="$2"
-        shift 3
-        exec "$@"
-        EOF
-        chmod +x readiness-probe runuser-probe
-        grep -q -- '--default-configuration' ${preflightScript}
-        grep -q -- '--configuration nixosConfigurations.fixture' ${preflightScript}
-        if grep -q -- '--default-configuration' ${homePreflightScript}; then
-          echo "Standalone Home Manager incorrectly claimed the flake default" >&2
-          exit 1
-        fi
-        printf 'root\ntester\n' > expected
-        for owner in root tester; do
-          export FAIL_OWNER="$owner"
-          : > events
-          if ${pkgs.runtimeShell} ${preflightScript} 2> error; then
-            echo "Readiness preflight accepted missing $owner artifacts" >&2
-            exit 1
-          fi
-          diff -u expected events
-        done
-        export FAIL_OWNER=none
-        : > events
-        ${pkgs.runtimeShell} ${preflightScript}
-        diff -u expected events
-
-        : > events
-        ${pkgs.runtimeShell} ${homePreflightScript}
-        printf 'root\n' > expected-home
-        diff -u expected-home events
-
-        jq -e '.schema == "nix-seal.deployment.v1" and (.targets | length) == 2' ${integrated.config.nixSeal.deploymentFile}
-        home_plan=$(jq -r '.targets[] | select(.target == "home/tester/fixture") | .plan' ${integrated.config.nixSeal.deploymentFile})
-        jq --arg executable ${lib.escapeShellArg expectedServiceExecutable} -e \
-          '.targets["home/tester/fixture"].serviceActions.executable == $executable' "$home_plan"
-        # The host may already have a private cache. Test an absent cache inside
-        # the sandbox so readiness diagnoses missing artifacts, not permissions.
-        jq --arg cache "$TMPDIR/empty-cache" '.artifactCacheRoot = $cache' \
-          ${configuration.config.nixSeal.activationSpecs.activation} > activation.json
-        if nix-seal readiness --spec "$PWD/activation.json" \
-          --deployment ${configuration.config.nixSeal.deploymentFile} \
-          --default-configuration --json > report.json; then
-          echo "readiness accepted an unprepared system" >&2
-          exit 1
-        fi
-        if ! jq -e '.ready == false and (.errors | length) == 0 and (.artifacts[0].missing | length) > 0 and (.preparationCommand | contains("prepare --identity")) and (.preparationCommand | contains("--deployment") | not)' report.json; then
-          jq . report.json >&2
-          exit 1
-        fi
-        touch "$out"
-      '';
+      (
+        (import ../lib/render-text.nix) ./scripts/check-deployment-readiness.sh {
+          pkgs_runtimeShell = pkgs.runtimeShell;
+          inherit preflightScript;
+          inherit homePreflightScript;
+          integrated_config_nixSeal_deploymentFile = integrated.config.nixSeal.deploymentFile;
+          lib_escapeShellArg_expectedServiceExecutable = lib.escapeShellArg expectedServiceExecutable;
+          configuration_config_nixSeal_activationSpecs_activation =
+            configuration.config.nixSeal.activationSpecs.activation;
+          configuration_config_nixSeal_deploymentFile = configuration.config.nixSeal.deploymentFile;
+          runuser_probeFixture = pkgs.replaceVars ./scripts/runuser-probe-fixture.sh.in {
+            pkgs_runtimeShell = pkgs.runtimeShell;
+          };
+          readiness_probeFixture = pkgs.replaceVars ./scripts/readiness-probe-fixture.sh.in {
+            pkgs_runtimeShell = pkgs.runtimeShell;
+          };
+        }
+      );
   public-template-values =
     let
       templates = import ../lib/templates.nix { inherit lib; };
@@ -608,11 +557,11 @@ in
     assert templates.renderPublic "{{public:value}}" { value = ""; } == "";
     pkgs.runCommand "nix-seal-public-template-values"
       { nativeBuildInputs = [ self.packages.${system}.nix-seal ]; }
-      ''
-        nix-seal check --nix-plan ${withValues.config.nixSeal.planFile}
-        nix-seal template check --plan ${withValues.config.nixSeal.planFile}
-        touch $out
-      '';
+      (
+        (import ./../lib/render-text.nix) ./scripts/check-public-template-values.sh {
+          withValues_config_nixSeal_planFile = withValues.config.nixSeal.planFile;
+        }
+      );
   concise-authoring =
     let
       ambiguous = conciseConfiguration.extendModules {
@@ -689,10 +638,11 @@ in
       ).success;
     pkgs.runCommand "nix-seal-concise-authoring"
       { nativeBuildInputs = [ self.packages.${system}.nix-seal ]; }
-      ''
-        nix-seal check --nix-plan ${concise.planFile}
-        touch $out
-      '';
+      (
+        (import ./../lib/render-text.nix) ./scripts/check-concise-authoring.sh {
+          concise_planFile = concise.planFile;
+        }
+      );
   native-authoring =
     assert native.targetId == "host/nixos/native";
     assert native.templateDirectory == "templates";
@@ -755,19 +705,14 @@ in
           self.packages.${system}.nix-seal
         ];
       }
-      ''
-        nix-seal check --nix-plan ${native.planFile}
-        nix-seal template check --plan ${native.planFile}
-        jq -e '
-          (.templates | keys == ["alice/hosts/nixos/native/aliased", "alice/hosts/nixos/native/from-file", "alice/hosts/nixos/native/named", "alice/hosts/nixos/native/ready"]) and
-          (.secrets | keys == ["alice/hosts/nixos/native/nix-access-tokens"])
-        ' ${native.planFile} >/dev/null
-        jq -e '
-          (.templates == {}) and
-          (.secrets | keys == ["alice/hosts/nixos/native/pending"])
-        ' ${native.bootstrapPlanFile} >/dev/null
-        touch "$out"
-      '';
+      (
+        (import ./../lib/render-text.nix) ./scripts/check-native-authoring.sh {
+          native_planFile = native.planFile;
+          native_bootstrapPlanFile = native.bootstrapPlanFile;
+          filter2 = ./scripts/native-authoring-bootstrap-plan.jq;
+          filter1 = ./scripts/native-authoring-ready-plan.jq;
+        }
+      );
   plan-v2 =
     assert
       (builtins.fromJSON (
@@ -791,16 +736,12 @@ in
     pkgs.runCommand "nix-seal-plan-v2" { } "touch $out";
   module-cache-discovery =
     pkgs.runCommand "nix-seal-module-cache-discovery" { nativeBuildInputs = [ pkgs.jq ]; }
-      ''
-        jq -e '
-          .schema == "nix-seal.activation.v2" and
-          .artifactCacheRoot == "/var/lib/nix-seal/cache/v1" and
-          (.artifacts | length) == 1 and
-          (.artifacts[0] | has("ciphertext") | not) and
-          (.artifacts[0] | has("envelope") | not)
-        ' ${configuration.config.nixSeal.activationSpec} >/dev/null
-        touch "$out"
-      '';
+      (
+        (import ./../lib/render-text.nix) ./scripts/check-module-cache-discovery.sh {
+          configuration_config_nixSeal_activationSpec = configuration.config.nixSeal.activationSpec;
+          filter1 = ./scripts/activation-cache-discovery.jq;
+        }
+      );
   scoped-target-and-administrator-projection =
     assert scopedConfiguration.config.nixSeal.targetId == "host/nixos/fixture";
     assert scopedConfiguration.config.nixSeal.secretScope == "hosts/nixos/fixture";
@@ -844,47 +785,34 @@ in
         "hosts/./shared"
         "hosts/shared/"
       ];
-    pkgs.runCommand "nix-seal-configurable-secret-directories" { nativeBuildInputs = [ pkgs.jq ]; } ''
-      jq -e '.secrets["alice/hosts/nixos/fixture/nix-access-tokens"].source == "hosts/shared/nix-access-tokens.age"' ${custom.planFile} >/dev/null
-      jq -e '.secrets["alice/hosts/nixos/fixture/nix-access-tokens"].consumers == ["host/nixos/fixture"]' ${shared.planFile} >/dev/null
-      jq -e '.secrets["alice/users/tester/nix-access-tokens"].consumers == ["home/tester/fixture"]' ${home.planFile} >/dev/null
-      touch "$out"
-    '';
+    pkgs.runCommand "nix-seal-configurable-secret-directories" { nativeBuildInputs = [ pkgs.jq ]; } (
+      (import ./../lib/render-text.nix) ./scripts/check-configurable-secret-directories.sh {
+        custom_planFile = custom.planFile;
+        shared_planFile = shared.planFile;
+        home_planFile = home.planFile;
+      }
+    );
   scoped-plan-administrator-projection =
     pkgs.runCommand "nix-seal-scoped-plan-administrator-projection" { nativeBuildInputs = [ pkgs.jq ]; }
-      ''
-        jq -e '
-          (.identities | has("alice/administrator")) and
-          (.identities | has("alice/recovery")) and
-          (.identities | has("alice/release")) and
-          ((.identities | has("bob/administrator")) | not) and
-          (.approvalPolicies | has("alice/release")) and
-          (.secrets | has("alice/hosts/nixos/fixture/nix-access-tokens")) and
-          (.secrets["alice/hosts/nixos/fixture/nix-access-tokens"].administrators == ["alice/administrator", "alice/recovery"]) and
-          (.secrets["alice/hosts/nixos/fixture/nix-access-tokens"].consumers == ["host/nixos/fixture"])
-        ' ${scopedConfiguration.config.nixSeal.planFile} >/dev/null
-        touch "$out"
-      '';
+      (
+        (import ./../lib/render-text.nix) ./scripts/check-scoped-administrator-projection.sh {
+          scopedConfiguration_config_nixSeal_planFile = scopedConfiguration.config.nixSeal.planFile;
+          filter1 = ./scripts/scoped-administrator-projection.jq;
+        }
+      );
   bootstrap-state-is-inferred-from-ciphertext-existence =
     assert bootstrapConfiguration.config.nixSeal.bootstrapPlanFile != null;
     pkgs.runCommand "nix-seal-bootstrap-state-is-inferred-from-ciphertext-existence"
       { nativeBuildInputs = [ pkgs.jq ]; }
-      ''
-        jq -e '
-          (.secrets | length) == 0 and
-          ((.identities | has("alice/bootstrap-authorizer")) | not)
-        ' ${bootstrapConfiguration.config.nixSeal.planFile} >/dev/null
-        jq -e '
-          .schema == "nix-seal.bootstrap-create-plan.v1" and
-          (.identities | has("alice/bootstrap-authorizer")) and
-          (.secrets | keys == ["alice/hosts/nixos/fixture/first-token"]) and
-          .secrets["alice/hosts/nixos/fixture/first-token"].source
-          == "secrets/alice/hosts/nixos/fixture/first-token.age" and
-          .secrets["alice/hosts/nixos/fixture/first-token"].sourceCiphertextHash
-          == "0000000000000000000000000000000000000000000000000000000000000000"
-        ' ${bootstrapConfiguration.config.nixSeal.bootstrapPlanFile} >/dev/null
-        touch "$out"
-      '';
+      (
+        (import ./../lib/render-text.nix) ./scripts/check-inferred-bootstrap-state.sh {
+          bootstrapConfiguration_config_nixSeal_planFile = bootstrapConfiguration.config.nixSeal.planFile;
+          bootstrapConfiguration_config_nixSeal_bootstrapPlanFile =
+            bootstrapConfiguration.config.nixSeal.bootstrapPlanFile;
+          filter2 = ./scripts/bootstrap-create-plan.jq;
+          filter1 = ./scripts/bootstrap-ready-plan.jq;
+        }
+      );
   literal-service-arguments =
     assert lib.all (
       command: lib.hasInfix encodedIdentity command
@@ -934,6 +862,15 @@ in
       };
     pkgs.runCommand "nix-seal-literal-service-arguments" { } "touch $out";
   derived-home-target =
+    assert lib.hasInfix "homeConfigurations.tester@fixture"
+      standaloneHomeConfiguration.config.home.activation.nixSealReadiness.data;
+    assert lib.hasInfix "--default-configuration"
+      standaloneHomeConfiguration.config.home.activation.nixSealReadiness.data;
+    assert lib.hasInfix "${
+      if pkgs.stdenv.hostPlatform.isDarwin then "darwinConfigurations" else "nixosConfigurations"
+    }.fixture-host" integratedHomeConfiguration.config.home.activation.nixSealReadiness.data;
+    assert lib.hasInfix "--default-configuration"
+      integratedHomeConfiguration.config.home.activation.nixSealReadiness.data;
     assert standaloneHomeConfiguration.config.nixSeal.targetId == "home/tester/fixture";
     assert standaloneHomeConfiguration.config.nixSeal.secretScope == "users/tester";
     assert
@@ -949,6 +886,21 @@ in
         && lib.hasInfix "$XDG_RUNTIME_DIR/nix-seal" warning
       ) standaloneHomeConfiguration.config.warnings == pkgs.stdenv.hostPlatform.isLinux;
     pkgs.runCommand "nix-seal-derived-home-target" { } "touch $out";
+  home-launch-agent-domains =
+    assert
+      !pkgs.stdenv.hostPlatform.isDarwin
+      || (
+        let
+          home = standaloneHomeConfiguration.config;
+          overridden = standaloneHomeConfiguration.extendModules {
+            modules = [ { launchd.agents.nix-seal-services.domain = "user"; } ];
+          };
+        in
+        home.launchd.agents.nix-seal-activation.domain == "gui"
+        && home.launchd.agents.nix-seal-services.domain == "gui"
+        && overridden.config.launchd.agents.nix-seal-services.domain == "user"
+      );
+    pkgs.runCommand "nix-seal-home-launch-agent-domains" { } "touch $out";
   home-service-activation-order =
     assert builtins.elem "nixSeal"
       standaloneHomeConfiguration.config.home.activation.nixSealServices.after;
@@ -971,103 +923,66 @@ in
         let
           home = (integrated volatile).config;
         in
-        ''
-          (
-            unset XDG_RUNTIME_DIR
-            ${home.home.activation.nixSeal.data}
-            test "$XDG_RUNTIME_DIR" = "/run/user/$(${pkgs.coreutils}/bin/id -u)"
-            export XDG_RUNTIME_DIR="$TMPDIR/custom-runtime"
-            ${home.home.activation.nixSealServices.data}
-            test "$XDG_RUNTIME_DIR" = "$TMPDIR/custom-runtime"
-          )
-        '';
+        (import ./../lib/render-text.nix) ./scripts/exercise-embedded-home-runtime.sh {
+          home_home_activation_nixSeal_data = home.home.activation.nixSeal.data;
+          pkgs_coreutils = pkgs.coreutils;
+          home_home_activation_nixSealServices_data = home.home.activation.nixSealServices.data;
+        };
     in
-    pkgs.runCommand "nix-seal-embedded-home-runtime-environment" { } ''
-      run() { :; }
-      ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-        ${exercise true}
-        ${exercise false}
-        if (
-          unset XDG_RUNTIME_DIR
-          ${standaloneHomeConfiguration.config.home.activation.nixSeal.data}
-        ); then
-          echo "standalone activation accepted a missing runtime environment" >&2
-          exit 1
-        fi
-      ''}
-      touch "$out"
-    '';
-  home-dry-activation = pkgs.runCommand "nix-seal-home-dry-activation" { } ''
-    export DRY_RUN=1
-    export XDG_RUNTIME_DIR="$TMPDIR/runtime"
-    run() {
-      printf 'skipped\n' >> "$TMPDIR/skipped"
+    pkgs.runCommand "nix-seal-embedded-home-runtime-environment" { } (
+      (import ../lib/render-text.nix) ./scripts/check-embedded-home-runtime.sh {
+        lib_optionalString_pkgs_stdenv_hostPlatform_isLinux_exercise =
+          lib.optionalString pkgs.stdenv.hostPlatform.isLinux
+            (
+              (import ./../lib/render-text.nix) ./scripts/check-home-runtime-environment.sh {
+                exercise_true = exercise true;
+                exercise_false = exercise false;
+                standaloneHomeConfiguration_config_home_activation_nixSeal_d =
+                  standaloneHomeConfiguration.config.home.activation.nixSeal.data;
+              }
+            );
+      }
+    );
+  home-dry-activation = pkgs.runCommand "nix-seal-home-dry-activation" { } (
+    (import ../lib/render-text.nix) ./scripts/check-home-dry-activation.sh {
+      standaloneHomeConfiguration_config_home_activation_nixSeal_d =
+        standaloneHomeConfiguration.config.home.activation.nixSeal.data;
+      standaloneHomeConfiguration_config_home_activation_nixSealSe =
+        standaloneHomeConfiguration.config.home.activation.nixSealServices.data;
     }
-    ${standaloneHomeConfiguration.config.home.activation.nixSeal.data}
-    ${standaloneHomeConfiguration.config.home.activation.nixSealServices.data}
-    test "$(wc -l < "$TMPDIR/skipped")" -eq 2
-    test ! -e "$XDG_RUNTIME_DIR"
-    touch "$out"
-  '';
+  );
   runtime-mountpoint =
     pkgs.runCommand "nix-seal-runtime-mountpoint"
       {
         nativeBuildInputs = [ pkgs.python3 ];
         activation = configuration.config.system.activationScripts.nixSealRuntime.text;
       }
-      ''
-        python3 <<'PY'
-        import os
-        import pathlib
-        import subprocess
-
-        root = pathlib.Path.cwd() / "runtime"
-        mounted = pathlib.Path.cwd() / "mounted"
-        events = pathlib.Path.cwd() / "events"
-        mock = pathlib.Path.cwd() / "mount-probe"
-        mock.write_text("""#!${pkgs.python3}/bin/python3
-        import pathlib, sys
-        root = pathlib.Path(sys.argv[-1])
-        if sys.argv[1] == "--quiet":
-            sys.exit(0 if pathlib.Path("mounted").exists() else 1)
-        if not root.is_dir():
-            sys.exit("mount point does not exist")
-        pathlib.Path("mounted").touch()
-        with pathlib.Path("events").open("a") as output:
-            output.write("mount\\n")
-        """)
-        mock.chmod(0o700)
-        source = pathlib.Path(os.environ["activation"].strip()).read_text()
-        source = source.replace("/run/nix-seal", str(root))
-        source = source.replace("${pkgs.util-linux}/bin/mountpoint", str(mock))
-        source = source.replace("${pkgs.util-linux}/bin/mount", str(mock))
-        # Exercise the generated mount logic without materializing any secrets.
-        source = source.replace("${lib.getExe configuration.config.nixSeal.package}", "true")
-        script = pathlib.Path("activation.sh")
-        script.write_text(source)
-        subprocess.run(
-            ["${pkgs.bash}/bin/bash", str(script)],
-            env=dict(os.environ, DRY_ACTIVATE="1"), check=True,
-        )
-        assert not root.exists() and not mounted.exists()
-        subprocess.run(["${pkgs.bash}/bin/bash", str(script)], check=True)
-        marker = root / "existing-generation"
-        marker.touch()
-        subprocess.run(["${pkgs.bash}/bin/bash", str(script)], check=True)
-        assert marker.exists()
-        assert events.read_text() == "mount\n"
-        PY
-        touch "$out"
-      '';
+      (
+        (import ../lib/render-text.nix) ./scripts/check-runtime-mountpoint.sh {
+          pkgs_replaceVars_scripts_module_evaluation_check_py_py_pkgs_ =
+            pkgs.replaceVars ./scripts/check_runtime_mountpoint.py
+              {
+                mountProbe = pkgs.replaceVars ./scripts/mount_probe.py { pkgs_python3 = pkgs.python3; };
+                pkgs_util_linux = pkgs.util-linux;
+                lib_getExe_configuration_config_nixSeal_package = lib.getExe configuration.config.nixSeal.package;
+                pkgs_bash = pkgs.bash;
+              };
+        }
+      );
   service-credential-policy-projection =
     pkgs.runCommand "nix-seal-service-credential-policy-projection" { nativeBuildInputs = [ pkgs.jq ]; }
-      ''
-        jq -e '
-          .secrets["alice/users/tester/service-token"].runtime.restartUnits
-          == ${if pkgs.stdenv.hostPlatform.isLinux then "[\"example.service\"]" else "[]"}
-        ' ${standaloneHomeConfiguration.config.nixSeal.planFile} >/dev/null
-        touch "$out"
-      '';
+      (
+        (import ./../lib/render-text.nix) ./scripts/check-service-credential-policy.sh {
+          standaloneHomeConfiguration_config_nixSeal_planFile =
+            standaloneHomeConfiguration.config.nixSeal.planFile;
+          filter1 = pkgs.writeText "service-credential-restart-policy.jq" (
+            (import ../lib/render-text.nix) ./scripts/service-credential-restart-policy.jq {
+              if_pkgs_stdenv_hostPlatform_isLinux_then_example_service_els =
+                if pkgs.stdenv.hostPlatform.isLinux then "[\"example.service\"]" else "[]";
+            }
+          );
+        }
+      );
   explicit-scope-overrides =
     assert overrideConfiguration.config.nixSeal.targetId == "host/custom";
     assert overrideConfiguration.config.nixSeal.secretScope == "systems/custom";

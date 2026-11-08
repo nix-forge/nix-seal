@@ -17,11 +17,11 @@ let
     })
     escapeSystemdExecArgs
     ;
-  argumentProbe = pkgs.writeShellScript "nix-seal-argument-probe" ''
-    set -eu
-    test "$1" = ${pkgs.lib.escapeShellArg literalArgument}
-    test "$2" = /run
-  '';
+  argumentProbe = pkgs.writeShellScript "nix-seal-argument-probe" (
+    (import ../lib/render-text.nix) ./scripts/nix-seal-argument-probe.sh {
+      pkgs_lib_escapeShellArg_literalArgument = pkgs.lib.escapeShellArg literalArgument;
+    }
+  );
 in
 pkgs.testers.nixosTest {
   name = "nix-seal-runtime-activation";
@@ -33,6 +33,9 @@ pkgs.testers.nixosTest {
       pkgs.findutils
       pkgs.gnugrep
       pkgs.jq
+      (pkgs.writeShellScriptBin "nix-seal-runtime-scenario" (
+        builtins.readFile ./scripts/runtime-vm-scenario.sh
+      ))
       (pkgs.writeShellScriptBin "assert-no-store-secret" (
         builtins.readFile ./scripts/assert-no-store-secret.sh
       ))
@@ -70,5 +73,5 @@ pkgs.testers.nixosTest {
     system.stateVersion = "26.05";
   };
 
-  testScript = builtins.readFile ./scripts/runtime-vm-test.py;
+  testScript = builtins.readFile ./scripts/runtime_vm_test.py;
 }

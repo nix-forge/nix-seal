@@ -20,7 +20,7 @@ let
   cfg = config.nixSeal;
   # Capture the complete module argument set so target metadata is used when
   # a framework supplies it, without making it mandatory for standalone users.
-  targetName = args.targetName or null;
+  targetName = args.targetName or (config._module.args.targetName or null);
   # The host configuration owns the security-status diagnostic for an
   # embedded Home Manager profile. A standalone Home Manager profile has no
   # host layer and therefore remains responsible for showing it.

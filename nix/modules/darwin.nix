@@ -1,5 +1,10 @@
 self:
-args@{ config, lib, ... }:
+args@{
+  config,
+  lib,
+
+  ...
+}:
 let
   cfg = config.nixSeal;
   configName = args.configName or null;
@@ -33,6 +38,18 @@ let
       user
     ]) embeddedHomeManagerUsers;
   prepareArguments = runtimeArguments "prepare";
+  # launchd loads system jobs before the separately mounted Nix store is
+  # necessarily available. Keep the initial executable on the root volume;
+  # a failed spawn is not retried just because the store appears later.
+  bootArguments =
+    arguments:
+    [
+      "/bin/sh"
+      "-c"
+      ''/bin/wait4path "$1" && exec "$@"''
+      "nix-seal-boot"
+    ]
+    ++ arguments;
   prepare = lib.escapeShellArgs prepareArguments;
   activateArguments =
     spec:
@@ -133,7 +150,7 @@ in
         lib.optionalAttrs cfg.darwin.volatileRuntime.enable {
           nix-seal-runtime.serviceConfig = {
             Label = "io.nix-seal.runtime";
-            ProgramArguments = prepareArguments;
+            ProgramArguments = bootArguments prepareArguments;
             RunAtLoad = true;
             ProcessType = "Background";
           };
@@ -145,7 +162,7 @@ in
               name = "nix-seal-${phase}";
               value.serviceConfig = {
                 Label = "io.nix-seal.${phase}";
-                ProgramArguments = activateArguments cfg.activationSpecs.${phase};
+                ProgramArguments = bootArguments (activateArguments cfg.activationSpecs.${phase});
                 RunAtLoad = true;
                 ProcessType = "Background";
               };
@@ -197,18 +214,15 @@ in
                   ++ lib.optionals isDefaultConfiguration [ "--default-configuration" ]
                 );
               in
-              lib.optionalString (destination.specs != [ ]) ''
-                if ! ${command}; then readiness_failed=1; fi
-              '';
+              lib.optionalString (destination.specs != [ ]) (
+                (import ../lib/render-text.nix) ./scripts/darwin-check-target-readiness.sh { inherit command; }
+              );
           in
-          ''
-            readiness_failed=0
-            ${lib.concatMapStringsSep "\n" check cfg.deploymentTargets}
-            if [ "$readiness_failed" -ne 0 ]; then
-              echo "nix-seal: preparation is required before retrying activation; nix-seal runtime preparation has not run." >&2
-              exit 1
-            fi
-          ''
+          (import ../lib/render-text.nix) ./scripts/darwin-check-deployment-readiness.sh {
+            lib_concatMapStringsSep_n_check_cfg_deploymentTargets =
+              lib.concatMapStringsSep "\n" check
+                cfg.deploymentTargets;
+          }
         )
       );
     }

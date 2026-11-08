@@ -2,6 +2,12 @@
 
 Status: accepted
 
+Home Manager on macOS schedules persistent phase activation in the `gui`
+launchd domain by default. Normal Aqua login loads those agents in the same
+session as their consumers; a `user` domain default can leave volatile settings
+absent after login. Explicit per-agent domain overrides remain supported.
+This changes scheduling only, with no change to cryptography or trust policy.
+
 Repeated NixOS activation must preserve the mounted secret generations. Mounting
 another tmpfs over `/run/nix-seal` hides the active generation and any existing
 runtime identities. Mount the configured filesystem only when the path is not

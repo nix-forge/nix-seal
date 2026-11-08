@@ -1,0 +1,15 @@
+#!@pkgs_runtimeShell@
+# shellcheck shell=bash disable=SC2154,SC2239
+if [ "$1" = readiness ]; then
+  case " $* " in
+  *" --deployment "*) ;;
+  *) exit 2 ;;
+  esac
+  echo "check:${TEST_OWNER:-root}" >>"$PWD/events"
+  if [ "${TEST_OWNER:-root}" = "$FAIL_OWNER" ]; then
+    echo "target-local cache lacks verified artifacts" >&2
+    exit 1
+  fi
+else
+  echo runtime >>"$PWD/events"
+fi
