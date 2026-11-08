@@ -183,6 +183,8 @@
               excludes = [
                 ".*\\.age$"
                 "^vendor/age/"
+                # Preserve the pinned upstream notice bytes, including its final blank line.
+                "^vendor/LICENSE-APACHE$"
               ];
             };
             trim-trailing-whitespace = {
