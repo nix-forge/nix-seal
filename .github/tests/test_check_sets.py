@@ -12,24 +12,14 @@ class CheckSetTests(unittest.TestCase):
     def test_native_checks_follow_additions_and_deletions(self):
         for names in [["package"], ["package", "new-runtime"], ["new-runtime"]]:
             with self.subTest(names=names):
-                expression = """
-                    let
-                        names = builtins.fromJSON NAMES;
-                        native = builtins.listToAttrs (map (name: {
-                            inherit name;
-                            value = "native";
-                        }) names);
-                        self = { checks.fixture = native // {
-                            pre-commit = "hooks";
-                            treefmt = "formatter";
-                        }; } // result;
-                        result = (import MODULE { inherit self; }).flake;
-                    in {
-                        native = builtins.attrNames result.ciChecks.fixture;
-                        lint = builtins.attrNames result.lintChecks.fixture;
-                    }
-                """.replace("NAMES", json.dumps(json.dumps(names))).replace(
-                    "MODULE", json.dumps(str(MODULE))
+                expression = (
+                    (
+                        Path(__file__).with_name("fixtures")
+                        / "ci-check-set-partition.nix.in"
+                    )
+                    .read_text(encoding="utf-8")
+                    .replace("NAMES", json.dumps(json.dumps(names)))
+                    .replace("MODULE", json.dumps(str(MODULE)))
                 )
                 result = subprocess.run(
                     ["nix", "eval", "--impure", "--json", "--expr", expression],

@@ -1,0 +1,6 @@
+#!@pkgs_runtimeShell@
+# shellcheck shell=bash disable=SC2154,SC2239
+test "$1" = -H && test "$2" = -u && test "$4" = -- || exit 2
+export TEST_OWNER="$3"
+shift 4
+exec "$@"

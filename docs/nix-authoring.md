@@ -205,6 +205,11 @@ to root ownership and mode `0400`, with group `root` on Linux and `wheel` on
 macOS. Home Manager uses the profile username, and group `staff` on macOS or
 the username on Linux. Configure another group when that group does not exist.
 
+On macOS, Home Manager's nix-seal LaunchAgents default to the `gui` domain so
+normal graphical login restores volatile settings in the consumer's session.
+For an explicitly managed non-graphical session, override
+`launchd.agents.nix-seal-<phase>.domain` to `"user"` for each configured phase.
+
 ## Create the missing values
 
 Declare the secret and its templates before creating ciphertext. Missing

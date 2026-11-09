@@ -8,5 +8,166 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 regexTarget = "match"
 description = "The activation integration test uses a deterministic, non-secret password canary."
-paths = ['''^crates/nix-seal-cli/src/main\.rs$''']
+paths = ['''(^|/)crates/nix-seal-cli/src/main\.rs$''']
 regexes = ['''password=Y2xpLWFjdGl2YXRpb24tY2FuYXJ5''']
+
+[[allowlists]]
+targetRules = ["age-secret-key", "generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+description = "Published age 0.12.1 test identities; source inventory pins their bytes."
+paths = [
+  '''(^|/)vendor/age/src/identity\.rs$''',
+  '''(^|/)vendor/age/src/native/x25519\.rs$''',
+  '''(^|/)vendor/age/tests/testdata/fail_large_filekey_x25519_key\.txt$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_crlf$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_empty_last_line$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_empty_line_begin$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_empty_line_end$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_eol_between_padding$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_full_last_line$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_garbage_encoded$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_garbage_leading$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_garbage_trailing$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_header_crlf$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_headers$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_invalid_character_header$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_invalid_character_payload$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_long_line$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_lowercase$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_no_end_line$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_no_eol$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_no_match$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_no_padding$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_not_canonical$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_pgp_checksum$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_short_line$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_whitespace_begin$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_whitespace_end$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_whitespace_eol$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_whitespace_last_line$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_whitespace_line_start$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_whitespace_outside$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/armor_wrong_type$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/header_crlf$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/hmac_bad$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/hmac_extra_space$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/hmac_garbage$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/hmac_missing$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/hmac_no_space$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/hmac_not_canonical$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/hmac_trailing_space$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/hmac_truncated$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/scrypt_and_x25519$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_bad_start$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_base64_padding$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_empty_argument$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_empty_body$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_empty_last_line$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_invalid_character$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_long_line$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_missing_body$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_missing_final_line$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_multiple_short_lines$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_no_arguments$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_not_canonical$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_spurious_cr$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stanza_valid_characters$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_257_chunks$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_257_chunks_full$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_258_chunks$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_bad_tag$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_bad_tag_second_chunk$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_bad_tag_second_chunk_full$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_empty_payload$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_last_chunk_empty$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_last_chunk_full$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_last_chunk_full_second$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_missing_tag$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_no_chunks$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_no_final$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_no_final_full$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_no_final_two_chunks$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_no_final_two_chunks_full$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_no_nonce$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_short_chunk$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_short_nonce$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_short_second_chunk$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_three_chunks$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_trailing_garbage_long$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_trailing_garbage_short$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_two_chunks$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_two_final_chunks$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_two_final_chunks_full$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_two_final_chunks_second$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/stream_two_final_chunks_short$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/version_unsupported$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_bad_tag$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_extra_argument$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_grease$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_identity$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_long_file_key$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_long_share$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_low_order$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_lowercase$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_multiple_recipients$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_no_match$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_not_canonical_body$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_not_canonical_share$''',
+  '''(^|/)vendor/age/tests/testdata/testkit/x25519_short_share$''',
+]
+regexes = [
+  '''^AGE\-SECRET\-KEY\-143WN7DCXU4G8R5AXQSSYD9AEPYDNT3HXSLWSPK36CDU6E8M59SSSAGZ3KG$''',
+  '''^AGE\-SECRET\-KEY\-1D8JAD8SXNFVQEFHAUNNAX4QCE3K5CUKMT7YYHNGTUSSP97YGWL4STV89UH$''',
+  '''^AGE\-SECRET\-KEY\-1EGTZVFFV20835NWYV6270LXYVK2VKNX2MMDKWYKLMGR48UAWX40Q2P2LM0$''',
+  '''^AGE\-SECRET\-KEY\-1GQ9778VQXMMJVE8SK7J6VT8UJ4HDQAJUVSFCWCM02D8GEWQ72PVQ2Y5J33$''',
+  '''^age1uc8zlurjyjpenrslc2thyl28u7ylz6x8c2g9yphvjha6xm8ppf3slq0l25$''',
+]
+
+[[allowlists]]
+targetRules = ["private-key"]
+condition = "AND"
+regexTarget = "secret"
+description = "Public upstream test key bodies and PEM parser code; adjacent new keys still scan."
+paths = ['''(^|/)vendor/age/src/ssh/identity\.rs$''']
+regexes = [
+  '''8P4E1HrEywpgqHMox08hfCTGX3Ph6fFIlS1/mkLojcgkrqmg1IrRvh8vvaZqzaAf''',
+  '''RSAAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBBDSh0pUW3A6a4KX''',
+  '''agAAAAtzc2gtZWQyNTUxOQAAACB7Ci6nqZYaVvrjm8\+XbzII89TsXzP111AflR7WeorBjQ''',
+  '''read_ssh::openssh_privkey\(\&privkey\)\.ok\(\)\.map\(\|\(_,\ key\)\|\ key\)''',
+  '''rsa::RsaPrivateKey::from_pkcs1_der\(\&privkey\)''',
+  '''smu3f1Gi/Ov305gASYkCWxL3cvzxTgP2prG7ky4FS5EnFeCoZU4GR49nMjTtJwVJz9vUmQ''',
+  '''z5dvMgjz1OxfM/XXUB\+VHtZ6isGNAAAAkIZMU3zFGbvSR/gvmNd9qiKr\+/XCxgE3NOCrWe''',
+  '''z5dvMgjz1OxfM/XXUB\+VHtZ6isGNAAAAkLXOo/xKLiv8ToPkQ9l838\+Lps5NAkJ/dnJLt9''',
+  '''z5dvMgjz1OxfM/XXUB\+VHtZ6isGNAAAAkLvH9UsJa\+ulewsZT2YtEkme1y9UZKI/vUbTms''',
+  '''z5dvMgjz1OxfM/XXUB\+VHtZ6isGNAAAAkPhBKsZoNmaeuWYJQxOl\+ofEmue/sFJnW\+4IOt''',
+]
+
+[[allowlists]]
+targetRules = ["private-key"]
+condition = "AND"
+regexTarget = "secret"
+description = "Public upstream test key bodies and PEM parser code; adjacent new keys still scan."
+paths = ['''(^|/)vendor/age/tests/testdata/empty_recipient_body_key\.txt$''']
+regexes = [
+  '''fgAAAAtzc2gtZWQyNTUxOQAAACAwKgrb/LkvtI887QylSoUh5xUlKr1fb37euR6et5jHow''',
+]
+
+[[allowlists]]
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+description = "Reviewed upstream fixture file SHA-256 values, not credentials."
+paths = ['''(^|/)security/age-source\.json$''']
+regexes = [
+  '''^0a064c25935e39d6a1b0efca3e68ccb1dbe3f3f8457b5f34a65df1b21cfb48d6$''',
+  '''^240201621cf4b88b8440a4b9bbecdfb91bbd4b35c74ebbbac0bb51f709b9e21f$''',
+  '''^4c9e0d218a9371bf430e43e85bdea3e4a92f99d9b5a865a40103999307e674c4$''',
+  '''^4fd2dd07a62131b23ae86477cd3b3cdedf8df5e4de6beffa8c4285630f126b3b$''',
+  '''^5196f3a6181304fbe3f34247f86a13b3bacd6c87d76e5e479c1d0aea211cdc52$''',
+  '''^619178c5678bd897701acf8bc04419663d0f1da6b2ca90ebf4ee963b8eed74f5$''',
+  '''^e4389d6b0ccb68b7a7ff7743e7a3fdd028278826d103822dbd1d4bee14ed00aa$''',
+  '''^f4c68a38ffc2c9c1ce2ba213123d6551e424a1a73fb8b9303bc2b26d75c7d5dc$''',
+]

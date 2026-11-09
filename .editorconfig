@@ -11,6 +11,9 @@ trim_trailing_whitespace = true
 [*.rs]
 indent_size = 4
 
+[*.py]
+indent_size = 4
+
 [*.md]
 # Markdown list continuation indentation depends on the marker width.
 indent_size = unset

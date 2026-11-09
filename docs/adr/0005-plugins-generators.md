@@ -24,6 +24,10 @@ dependencies. The CLI checks canonical recipient authorization before streaming
 any dependency into that workspace. Plugin errors are redacted and unrelated
 descriptors are closed.
 
+Numbered secret and public output files map to their respective declaration
+vectors by numeric index. Filename sets validate completeness only; lexical
+filename order must never select a secret's destination or recipient policy.
+
 The Rust adapter executes standard age plugin recipients and identities through
 the hidden `__plugin-worker` command. The parent resolves each required
 `age-plugin-*` executable only from canonical `/nix/store` paths before
@@ -63,3 +67,13 @@ ciphertext publication; a persistence failure can require the operator to supply
 the prompt again. Legacy repository-local prompt state blocks generation and
 requires explicit cleanup before Nix evaluation. The repository's direnv file
 is inert to prevent a durable approval from evaluating a changed checkout.
+
+Generator validation state now records `output_order = "declaration-numeric-v1"`.
+Unmarked existing external output sets with at least 11 secret outputs or at
+least 11 public outputs cannot establish that baseline implicitly. Historical
+state lists are checked even after a declaration shrinks or switches executable.
+Operators must review associations and recipient exposure before explicit
+replacement; the CLI does not infer safe rotation. Unknown markers fail closed.
+Both serialization and reading enforce the same 64 KiB state limit, with
+serialization checked before publication. The state is local metadata, not an
+authenticated attestation against the invoking user, who already controls it.

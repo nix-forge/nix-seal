@@ -1,0 +1,86 @@
+# Opt-in offline compatibility build. Never add this to the root workspace.
+[package]
+name = "nix-seal-legacy"
+version = "0.1.0-alpha.1"
+edition = "2024"
+rust-version = "1.93"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nix-forge/nix-seal"
+
+[[bin]]
+name = "nix-seal-legacy"
+path = "../crates/nix-seal-cli/src/main.rs"
+test = false
+
+[workspace]
+resolver = "2"
+
+[dependencies]
+# This is the only application workspace that may enable age's RSA feature.
+age = { version = "=0.12.1", default-features = false, features = ["ssh-rsa"] }
+argon2 = { version = "=0.6.0", default-features = false, features = [
+  "alloc",
+  "password-hash",
+] }
+anyhow = "1.0.98"
+base16ct = "1.0.0"
+base64 = { version = "=0.23.1", default-features = false, features = ["std"] }
+blake3 = "1.8.2"
+clap = { version = "4.5.40", features = ["derive"] }
+clap_complete = "4.5.54"
+clap_complete_nushell = "4.6.1"
+fs2 = "0.4.3"
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = [
+  "fast",
+  "zeroize",
+] }
+getrandom = "=0.4.3"
+jiff = { version = "=0.2.38", default-features = false, features = ["std"] }
+nix-seal-authoring = { path = "../crates/nix-seal-authoring", version = "=0.1.0-alpha.1" }
+nix-seal-cache = { path = "../crates/nix-seal-cache", version = "=0.1.0-alpha.1" }
+nix-seal-core = { path = "../crates/nix-seal-core", version = "=0.1.0-alpha.1" }
+nix-seal-crypto = { path = "../crates/nix-seal-crypto", version = "=0.1.0-alpha.1" }
+nix-seal-manifest = { path = "../crates/nix-seal-manifest", version = "=0.1.0-alpha.1" }
+nix-seal-policy = { path = "../crates/nix-seal-policy", version = "=0.1.0-alpha.1" }
+nix-seal-rekey = { path = "../crates/nix-seal-rekey", version = "=0.1.0-alpha.1" }
+nix-seal-runtime = { path = "../crates/nix-seal-runtime", version = "=0.1.0-alpha.1" }
+rustix = { version = "=1.1.5", features = [
+  "fs",
+  "process",
+  "termios",
+  "thread",
+] }
+secrecy = "0.10.3"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+serde_jcs = "0.2.0"
+sha2 = "=0.11.0"
+tempfile = "3.20.0"
+toml = "1.1.4"
+yaml_serde = "=0.10.7"
+uzers = { version = "=0.12.2", default-features = false }
+zeroize = "=1.9.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+overflow-checks = true
+panic = "abort"
+
+[patch.crates-io]
+age = { path = "../vendor/age" }
+i18n-config = { git = "https://github.com/kellpossible/cargo-i18n", rev = "2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4" }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+module_name_repetitions = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

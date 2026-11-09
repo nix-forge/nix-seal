@@ -10,14 +10,14 @@ _: {
       inherit (config.pre-commit.settings) enabledPackages package shellHook;
     in
     {
-      devShells.default = pkgs.mkShellNoCC {
+      devShells.default = pkgs.buildPackages.mkShellNoCC {
         inherit shellHook;
-        LIBRARY_PATH = lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "${pkgs.libiconv}/lib";
-        NIX_LDFLAGS = lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "-L${pkgs.libiconv}/lib";
+        LIBRARY_PATH = lib.optionalString pkgs.buildPackages.stdenv.hostPlatform.isDarwin "${pkgs.buildPackages.libiconv}/lib";
+        NIX_LDFLAGS = lib.optionalString pkgs.buildPackages.stdenv.hostPlatform.isDarwin "-L${pkgs.buildPackages.libiconv}/lib";
         packages =
           enabledPackages
           ++ [ package ]
-          ++ (with pkgs; [
+          ++ (with pkgs.buildPackages; [
             age
             actionlint
             cargo-audit
@@ -55,7 +55,9 @@ _: {
             yamllint
             zizmor
           ])
-          ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libiconv ];
+          ++ pkgs.buildPackages.lib.optionals pkgs.buildPackages.stdenv.hostPlatform.isDarwin [
+            pkgs.buildPackages.libiconv
+          ];
       };
     };
 }

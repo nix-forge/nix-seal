@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
-    "ci_rust", Path(__file__).parents[1] / "scripts/ci-rust.py"
+    "ci_rust", Path(__file__).parents[1] / "scripts/ci_rust.py"
 )
 if spec is None or spec.loader is None:
     raise ImportError("Unable to load the CI Rust helper")

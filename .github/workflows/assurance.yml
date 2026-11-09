@@ -58,7 +58,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Select repository Rust toolchain
-        run: python3 .github/scripts/ci-rust.py toolchain
+        run: python3 .github/scripts/ci_rust.py toolchain
       - name: Install cargo-mutants
         run: cargo install --locked --version 27.1.0 cargo-mutants
       - name: Mutate policy and core crates

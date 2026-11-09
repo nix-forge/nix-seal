@@ -19,39 +19,54 @@ let
     value: builtins.isFunction value || builtins.isAttrs value
   );
 
-  packageFor =
-    system:
+  packageFor = system: packageVariantFor system false;
+  legacyPackageFor = system: packageVariantFor system true;
+  packageVariantFor =
+    system: legacy:
     let
-      pkgs = inputs.nixpkgs.legacyPackages.${system};
+      pkgs = import inputs.nixpkgs (import ./platform-args.nix system);
       # CI, docs and Nix module edits do not change the Rust build. Keep schemas,
       # test fixtures and Cargo configuration in the explicitly declared source.
       src = import ./rust-source.nix {
         inherit lib;
+        inherit legacy;
         root = ../.;
       };
     in
     pkgs.rustPlatform.buildRustPackage {
-      pname = "nix-seal";
+      pname = if legacy then "nix-seal-legacy" else "nix-seal";
       inherit version;
       inherit src;
-      cargoLock.lockFile = "${src}/Cargo.lock";
+      cargoRoot = lib.optionalString legacy "legacy";
+      buildAndTestSubdir = lib.optionalString legacy "legacy";
+      cargoLock.lockFile = if legacy then "${src}/legacy/Cargo.lock" else "${src}/Cargo.lock";
+      cargoLock.outputHashes."i18n-config-0.4.8" = "sha256-ujGHZLORc4e5lXu7i10jtBKS/Hcipuz3mwZ4+V+pJ9k=";
       buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libiconv ];
       nativeCheckInputs = [
         pkgs.age
         pkgs.openssh
         pkgs.rage
       ];
-      preCheck = ''
-        export NIX_SEAL_REQUIRE_INTEROP=1
-        export NIX_SEAL_REQUIRE_SSHSIG_INTEROP=1
-        export NIX_SEAL_REQUIRE_CCTV=1
-        export NIX_SEAL_CCTV_AGE_TESTDATA=${inputs.cctv}/age/testdata
-      '';
+      preCheck =
+        (import ../nix/lib/render-text.nix) ./scripts/configure-interop-tests.sh {
+          inputs_cctv = inputs.cctv;
+        }
+        + lib.optionalString legacy ''
+          export NIX_SEAL_NORMAL_TEST_BINARY=${packageFor system}/bin/nix-seal
+        '';
+      postInstall = builtins.readFile ./scripts/install-vendored-age-notices.sh;
       cargoBuildFlags = [
         "--package"
-        "nix-seal"
+        (if legacy then "nix-seal-legacy" else "nix-seal")
       ];
-      cargoTestFlags = [ "--workspace" ];
+      cargoTestFlags =
+        if legacy then
+          [
+            "--test"
+            "rsa_migration"
+          ]
+        else
+          [ "--workspace" ];
       meta = {
         description = "Security-first secret management for Nix";
         homepage = "https://github.com/nix-forge/nix-seal";
@@ -59,7 +74,7 @@ let
           mit
           asl20
         ];
-        mainProgram = "nix-seal";
+        mainProgram = if legacy then "nix-seal-legacy" else "nix-seal";
         platforms = lib.platforms.linux ++ lib.platforms.darwin;
       };
     };
@@ -67,7 +82,7 @@ let
   documentationFor =
     system:
     let
-      pkgs = inputs.nixpkgs.legacyPackages.${system};
+      pkgs = import inputs.nixpkgs (import ./platform-args.nix system);
       nixSeal = packageFor system;
     in
     pkgs.runCommand "nix-seal-documentation-${version}"
@@ -77,49 +92,40 @@ let
           pkgs.mandoc
         ];
       }
-      ''
-        mandoc -Tlint ${../docs/nix-seal.1}
-        install -D -m 0644 ${../docs/nix-seal.1} "$out/share/man/man1/nix-seal.1"
-        install -d -m 0755 "$out/share/nix-seal/schemas" "$out/share/nix-seal/completions"
-        nix-seal schema --kind plan > "$out/share/nix-seal/schemas/plan-v2.json"
-        nix-seal schema --kind target-policy > "$out/share/nix-seal/schemas/target-policy-v1.json"
-        nix-seal schema --kind secret-recipients > "$out/share/nix-seal/schemas/secret-recipients-v1.json"
-        nix-seal schema --kind activation > "$out/share/nix-seal/schemas/activation-v2.json"
-        nix-seal schema --kind collection > "$out/share/nix-seal/schemas/collection-v1.json"
-        nix-seal completions bash > "$out/share/nix-seal/completions/nix-seal.bash"
-        nix-seal completions zsh > "$out/share/nix-seal/completions/_nix-seal"
-        nix-seal completions fish > "$out/share/nix-seal/completions/nix-seal.fish"
-        nix-seal completions nushell > "$out/share/nix-seal/completions/nix-seal.nu"
-      '';
+      (
+        (import ./../nix/lib/render-text.nix) ./scripts/install-documentation-and-completions.sh {
+          docs_nix_seal_1 = ../docs/nix-seal.1;
+        }
+      );
 
   documentationSiteFor =
     system:
     let
-      pkgs = inputs.nixpkgs.legacyPackages.${system};
+      pkgs = import inputs.nixpkgs (import ./platform-args.nix system);
       mkdocs = pkgs.python3.withPackages (python: [ python.mkdocs ]);
     in
-    pkgs.runCommand "nix-seal-documentation-site-${version}" { nativeBuildInputs = [ mkdocs ]; } ''
-      cp -R ${../docs} docs
-      cp -R ${../site} site
-      chmod -R u+w docs
-      mkdocs build --config-file site/mkdocs.yml --site-dir "$out" --strict
-      test -s "$out/index.html"
-      test -s "$out/search/search_index.json"
-    '';
+    pkgs.runCommand "nix-seal-documentation-site-${version}" { nativeBuildInputs = [ mkdocs ]; } (
+      (import ../nix/lib/render-text.nix) ./scripts/build-documentation-site.sh {
+        docs = ../docs;
+        site = ../site;
+      }
+    );
 in
 {
   perSystem =
     { system, ... }:
     let
-      pkgs = inputs.nixpkgs.legacyPackages.${system};
+      pkgs = import inputs.nixpkgs (import ./platform-args.nix system);
       nixSeal = packageFor system;
       documentation = documentationFor system;
+      nixSealLegacy = legacyPackageFor system;
       documentationSite = documentationSiteFor system;
     in
     {
       packages = {
         default = nixSeal;
         nix-seal = nixSeal;
+        nix-seal-legacy = nixSealLegacy;
         inherit documentation;
         documentation-site = documentationSite;
       };
@@ -135,18 +141,26 @@ in
           program = "${nixSeal}/bin/nix-seal";
           meta.description = nixSeal.meta.description;
         };
+        nix-seal-legacy = {
+          type = "app";
+          program = "${nixSealLegacy}/bin/nix-seal-legacy";
+          meta.description = "Opt-in offline legacy RSA migration";
+        };
       };
 
       checks = {
         nix-seal = nixSeal;
+        nix-seal-legacy = nixSealLegacy;
         inherit documentation;
         store-scan = import ../nix/tests/store-scan.nix { inherit pkgs; };
         bootstrap-terminal =
           pkgs.runCommand "nix-seal-bootstrap-terminal" { nativeBuildInputs = [ pkgs.python3 ]; }
-            ''
-              python3 ${../nix/tests/scripts/bootstrap-tty.py} ${nixSeal}/bin/nix-seal
-              touch "$out"
-            '';
+            (
+              (import ../nix/lib/render-text.nix) ./scripts/check-bootstrap-terminal.sh {
+                nix_tests_scripts_bootstrap_tty_py = ../nix/tests/scripts/bootstrap_tty.py;
+                inherit nixSeal;
+              }
+            );
       }
       // lib.optionalAttrs (system == "x86_64-linux") { documentation-site = documentationSite; }
       // import ../nix/tests/bash-writers.nix { inherit pkgs; }
@@ -184,6 +198,14 @@ in
     homeManagerModules.default = import ../nix/modules/home-manager.nix inputs.self;
     flakeModules.default = import ../nix/modules/flake-module.nix;
     flakeModules.nix-config-framework = import ../nix/modules/nix-config-framework.nix;
-    lib = import ../nix/lib { inherit lib; };
+    lib = (import ../nix/lib { inherit lib; }) // {
+      packagesFor = platform: {
+        default = packageFor platform;
+        nix-seal = packageFor platform;
+        nix-seal-legacy = legacyPackageFor platform;
+        documentation = documentationFor platform;
+        documentation-site = documentationSiteFor platform;
+      };
+    };
   };
 }

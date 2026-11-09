@@ -1,0 +1,114 @@
+# shellcheck shell=bash
+set -euo pipefail
+umask 077
+root=/var/lib/nix-seal-runtime-test
+install -d -m 0700 "$root" "$root/secrets"
+
+admin_recipient=$(nix-seal key generate --identity-out "$root/admin.age")
+target_recipient=$(nix-seal key generate --identity-out "$root/target.age")
+signer_public=$(nix-seal key generate-signing --key-out "$root/signer.key")
+
+# printf avoids a whitespace-sensitive here-document terminator inside the
+# Python test driver's indented command string.
+printf '%s
+' 'schema = "nix-seal.plan.v2"' "" '[identities.admin]' 'kind = "administrator"' "public = \"$admin_recipient\"" "" '[identities.target]' 'kind = "target"' "public = \"$target_recipient\"" "" '[identities.signer]' 'kind = "signer"' "public = \"$signer_public\"" "" '[targets.vm]' 'kind = "nixOs"' 'system = "x86_64-linux"' 'identity = "target"' "" '[targets.vm.serviceActions]' 'executable = "/run/current-system/sw/bin/systemctl"' 'timeoutSeconds = 30' "" '[approvalPolicies.release]' 'threshold = 1' 'signers = ["signer"]' "" '[secrets."app/token"]' 'source = "secrets/app-token.age"' 'sourceCiphertextHash = "0000000000000000000000000000000000000000000000000000000000000000"' 'administrators = ["admin"]' 'consumers = ["vm"]' 'approvalPolicy = "release"' "" '[secrets."app/token".runtime]' 'owner = "root"' 'group = "root"' 'mode = "0400"' 'restartUnits = ["nix-seal-test.service"]' "" '[templates."app/config"]' 'source = "template.txt"' "" '[templates."app/config".placeholders.token]' 'secret = "app/token"' 'encoding = "base64"' >"$root/nix-seal.toml"
+
+printf 'token={{nix-seal:token}}
+' >"$root/template.txt"
+nix-seal plan --toml "$root/nix-seal.toml" --output "$root/plan.v2.json"
+
+# Keep the random canary entirely in a pipe. The activated file is a
+# printable base64 token so grep can scan the Nix store using -f without
+# putting the value in process arguments.
+head -c 32 /dev/urandom | base64 -w0 | nix-seal secret create --plan "$root/plan.v2.json" --secret app/token --repository-root "$root" --identity "$root/admin.age"
+
+# Canonical authoring creates the ciphertext; compile the plan again so
+# its required public source hash is bound to the committed bytes.
+source_hash=$(sha256sum "$root/secrets/app-token.age" | cut -d' ' -f1)
+sed -i "s|^sourceCiphertextHash.*|sourceCiphertextHash = '$source_hash'|" "$root/nix-seal.toml"
+rm -f "$root/plan.v2.json"
+nix-seal plan --toml "$root/nix-seal.toml" --output "$root/plan.v2.json"
+
+nix-seal --json rekey --plan "$root/plan.v2.json" --repository-root "$root" --identity "$root/admin.age" --target vm --secret app/token --generation 1 --signing-key "$root/signer.key" --cache-root "$root/cache" >"$root/rekey-result.json"
+jq -n --arg root /run/nix-seal --arg plan "$root/plan.v2.json" --arg cache "$root/cache" --arg template "$root/template.txt" '{
+      schema: "nix-seal.activation.v2",
+      runtimeRoot: $root,
+      plan: $plan,
+      artifactCacheRoot: $cache,
+      targetId: "vm",
+      phase: "activation",
+      allowedClockSkew: 0,
+      artifacts: [{
+        secretId: "app/token",
+        phase: "activation",
+        mode: "0400",
+        owner: "root",
+        group: "root"
+      }],
+      templates: [{
+        source: $template,
+        templateId: "app/config",
+        phase: "activation",
+        placeholders: {token: {secretId: "app/token", encoding: "base64"}},
+        mode: "0400",
+        owner: "root",
+        group: "root"
+      }],
+      postSwitch: {
+        executable: "/run/current-system/sw/bin/systemctl",
+        manager: "systemd-system",
+        reloadUnits: [],
+        restartUnits: ["nix-seal-test.service"],
+        timeoutSeconds: 30
+      }
+    }' >"$root/activation.json"
+
+systemctl daemon-reload
+
+# A valid command path or timeout cannot override the signed target policy.
+# Both substitutions must fail before the first plaintext generation exists.
+jq '.postSwitch.timeoutSeconds = 31' "$root/activation.json" >"$root/substituted.json"
+if nix-seal activate --spec "$root/substituted.json" --identity "$root/target.age"; then
+  printf 'invalid activation unexpectedly succeeded\n' >&2
+  exit 1
+fi
+test ! -e /run/nix-seal/current
+jq --arg executable "$(readlink -f /run/current-system/sw/bin/systemctl)" '.postSwitch.executable = $executable' "$root/activation.json" >"$root/substituted.json"
+if nix-seal activate --spec "$root/substituted.json" --identity "$root/target.age"; then
+  printf 'invalid activation unexpectedly succeeded\n' >&2
+  exit 1
+fi
+test ! -e /run/nix-seal/current
+
+nix-seal activate --spec "$root/activation.json" --identity "$root/target.age"
+systemctl start nix-seal-test.service
+cmp /run/nix-seal-service-observed /run/nix-seal/current/app/token
+
+nix-seal activate --spec "$root/activation.json" --identity "$root/target.age"
+
+test "$(stat -c %a /run/nix-seal/current/app/token)" = 400
+test "$(stat -c %U:%G /run/nix-seal/current/app/token)" = root:root
+test "$(stat -c %a /run/nix-seal/current/templates/app/config)" = 400
+cut -d= -f2 /run/nix-seal/current/templates/app/config | base64 -d | cmp - /run/nix-seal/current/app/token
+systemctl is-active --quiet nix-seal-test.service
+cmp /run/nix-seal-service-observed /run/nix-seal/current/app/token
+
+# The random plaintext must not have escaped into the host-visible Nix
+# store. -f reads the candidate from the activated private file rather than
+# exposing it through argv or an environment variable.
+# Nix store paths may contain dangling symlinks after GC. Restrict the scan
+# to regular files rather than treating an unreadable dangling target as a
+# plaintext-leak failure.
+assert-no-store-secret /nix/store /run/nix-seal/current/app/token
+
+# A tampered artifact must fail before a generation switch and preserve the
+# working secret/template pair from the prior generation.
+artifact_path=$(find "$root/cache/artifacts" -mindepth 2 -maxdepth 2 -type f -name ciphertext.age -print -quit)
+test -n "$artifact_path"
+printf x >>"$artifact_path"
+if nix-seal activate --spec "$root/activation.json" --identity "$root/target.age"; then
+  printf 'invalid activation unexpectedly succeeded\n' >&2
+  exit 1
+fi
+cut -d= -f2 /run/nix-seal/current/templates/app/config | base64 -d | cmp - /run/nix-seal/current/app/token
+cmp /run/nix-seal-service-observed /run/nix-seal/current/app/token

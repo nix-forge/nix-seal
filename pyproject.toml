@@ -73,6 +73,30 @@ ban-relative-imports = "all"
 strict = true
 
 [tool.ruff.lint.per-file-ignores]
+
+"nix/tests/scripts/check_darwin_boot.py" = [
+  # Execute generated launchd arguments with a disposable blocking adapter.
+  "assert",
+  "print",
+  "suspicious-subprocess-import",
+  "subprocess-without-shell-equals-true",
+]
+
+"nix/tests/scripts/check_runtime_mountpoint.py" = [
+  # Generated activation is exercised with a disposable mount command fixture.
+  # The interpreter token becomes an immutable absolute store path before use.
+  "assert",
+  "suspicious-subprocess-import",
+  "subprocess-without-shell-equals-true",
+  "start-process-with-partial-path",
+  "uncapitalized-environment-variables",
+]
+
+"nix/tests/scripts/*_test.py" = [
+  # NixOS VM tests use ordinary Python assertions as their failure signal.
+  "assert",
+]
+
 ".github/tests/**/*.py" = [
   # Retained unittest suites exercise fixed local commands and temporary Git
   # trees; subprocess calls use argument lists without a shell.
@@ -83,7 +107,7 @@ strict = true
   "subprocess-without-shell-equals-true",
   "suspicious-subprocess-import",
 ]
-".github/scripts/ci-rust.py" = [
+".github/scripts/ci_rust.py" = [
   # CI orchestration invokes fixed cargo/nix commands and prints job output.
   "docstring-missing-returns",
   "docstring-missing-exception",
@@ -92,7 +116,7 @@ strict = true
   "subprocess-without-shell-equals-true",
   "suspicious-subprocess-import",
 ]
-"nix/tests/scripts/bootstrap-tty.py" = [
+"nix/tests/scripts/bootstrap_tty.py" = [
   # The integration fixture intentionally asserts invariants, replaces its
   # process with the tested CLI, and reports one final result to the Nix driver.
   "assert",
@@ -102,15 +126,15 @@ strict = true
   "subprocess-without-shell-equals-true",
   "suspicious-subprocess-import",
 ]
-"nix/tests/scripts/runtime-vm-test.py" = [
-  # NixOS test scripts receive these names from the test driver at runtime.
-  "undefined-name",
-]
 
 [tool.ruff.format]
 docstring-code-format = true
 line-ending = "lf"
 preview = true
+
+[tool.ty.analysis]
+# Driver dependencies are Linux-only; native Linux checks use its real types.
+allowed-unresolved-imports = ["test_driver.*"]
 
 [tool.ty.environment]
 python-version = "3.14"
@@ -126,13 +150,6 @@ exclude = [
   "**/__pycache__",
   "result",
 ]
-
-[[tool.ty.overrides]]
-include = ["nix/tests/scripts/runtime-vm-test.py"]
-
-[tool.ty.overrides.rules]
-# The NixOS driver supplies and validates these globals at evaluation time.
-unresolved-reference = "ignore"
 
 [tool.ty.terminal]
 error-on-warning = true

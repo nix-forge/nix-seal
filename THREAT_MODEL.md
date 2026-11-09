@@ -71,7 +71,11 @@ Identity, group, and target IDs occupy disjoint authorization namespaces.
 Approval thresholds count distinct Ed25519 key material across native and
 OpenSSH encodings. Legacy SSH signature IDs remain verifiable but cannot add a
 second vote for the same key. Normal encryption and decryption reject SSH RSA;
-explicit migration alone may decrypt legacy RSA sources.
+only the independently resolved `nix-seal-legacy` build may decrypt legacy RSA
+sources. Normal and fuzz dependency graphs exclude the RSA implementation.
+Public RSA metadata parsing does not enable RSA arithmetic. The legacy artifact
+retains the advisory and offline-only restrictions; it is never invoked
+implicitly by the normal binary. See ADR 0031 for the build boundary and tests.
 
 Foreign cache imports are validated in a private staging cache before publishing
 entries under one destination lock. Imports have aggregate entry and byte

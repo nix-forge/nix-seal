@@ -3,8 +3,10 @@ files.extend-exclude = [
   "flake/dev/flake.lock",
   "Cargo.lock",
   "fuzz/Cargo.lock",
+  "legacy/Cargo.lock",
   ".git/**",
   "target/**",
+  "vendor/age/**",
 ]
 
 [default.extend-words]
@@ -14,3 +16,8 @@ intoto = "intoto"
 
 [default.extend-identifiers]
 ANDed = "ANDed"
+
+[type.gitleaks]
+extend-glob = [".gitleaks.toml"]
+# Reviewed public cryptographic fixture strings are data, not spelling.
+extend-ignore-re = ['''age1[0-9a-z]{58,}''', '''[A-Za-z0-9/+\\]{48,}''']
