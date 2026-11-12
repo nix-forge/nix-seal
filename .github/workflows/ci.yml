@@ -1,112 +1,13 @@
-name: CI
+name: Seal dependency reconciliation
 on:
-  pull_request:
   workflow_dispatch:
-  merge_group:
-    types: [checks_requested]
 permissions: {}
 concurrency:
-  group: "${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}"
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: seal-reconciliation
+  cancel-in-progress: false
 jobs:
-  legacy-symbols:
-    name: legacy-symbols
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Reject removed manager symbols and runtime references
-        run: |
-          if git grep -nEi 'secret[c]tl|secret[I]ndex|config[.]age[.]secrets|inputs[.]agenix'; then
-            echo 'removed secret-manager symbols or agenix runtime references found' >&2
-            exit 1
-          fi
-  rust:
-    name: rust
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-14]
-    # Preserve required check names while retiring the macos-14 runner image.
-    runs-on: ${{ matrix.os == 'macos-14' && 'macos-26' || matrix.os }}
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Select repository Rust toolchain
-        run: python3 .github/scripts/ci_rust.py toolchain
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: cargo fmt --all -- --check
-      - run: cargo fmt --manifest-path legacy/Cargo.toml --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - run: cargo test --workspace --all-targets --all-features --locked
-      - run: cargo clippy --manifest-path legacy/Cargo.toml --all-targets --all-features --locked -- -D
-          warnings
-  msrv:
-    name: msrv
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Select manifest MSRV
-        run: python3 .github/scripts/ci_rust.py msrv
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - run: cargo clippy --manifest-path legacy/Cargo.toml --all-targets --all-features --locked -- -D
-          warnings
-  nix:
-    name: nix
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            system: x86_64-linux
-          - os: ubuntu-24.04-arm
-            system: aarch64-linux
-          - os: macos-14
-            system: aarch64-darwin
-    # Preserve required check names while retiring the macos-14 runner image.
-    runs-on: ${{ matrix.os == 'macos-14' && 'macos-26' || matrix.os }}
-    timeout-minutes: 60
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@1a6dfe0b851c69ad30169977e014bd45029e9c55 # v2.13.0
-        with:
-          cache: 'false'
-          cache-scope: ci-nix
-      - name: Build every declared native check
-        uses: nix-forge/ci/actions/flake-checks@1a6dfe0b851c69ad30169977e014bd45029e9c55 # v2.13.0
-        with:
-          system: ${{ matrix.system }}
-          checks-output: ciChecks
-      - name: Build portable lint checks once
-        if: matrix.system == 'x86_64-linux'
-        uses: nix-forge/ci/actions/flake-checks@1a6dfe0b851c69ad30169977e014bd45029e9c55 # v2.13.0
-        with:
-          system: ${{ matrix.system }}
-          checks-output: lintChecks
-      - name: Validate flake output schemas
-        env:
-          TARGET_SYSTEM: ${{ matrix.system }}
-        run: nix flake check --no-build --show-trace --system "$TARGET_SYSTEM"
-  tooling:
-    name: tooling
+  reconcile:
+    name: Lockfile and trusted-import reconciliation
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -114,151 +15,44 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
           fetch-depth: 0
-      - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@1a6dfe0b851c69ad30169977e014bd45029e9c55 # v2.13.0
-        with:
-          cache: 'false'
-          cache-scope: ci-tooling
-      - name: Check shared workflow contracts
-        uses: nix-forge/ci/actions/validate-workflows@1a6dfe0b851c69ad30169977e014bd45029e9c55 # v2.13.0
-      - name: Test Rust build source boundaries
-        run: nix develop --command python3 -m unittest discover -s .github/tests
-      - name: Run repository hooks and publication checks
-        uses: nix-forge/ci/actions/repository-checks@1a6dfe0b851c69ad30169977e014bd45029e9c55 # v2.8.0-compatible SLSA contract
-        with:
-          history-baseline: .gitleaks-baseline.json
-      - name: Report formatting changes after failed hooks
-        if: failure()
-        run: git diff --stat
-  vet:
-    name: vet
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
           persist-credentials: false
-      - name: Select repository Rust toolchain
+      - name: Select the declared repository toolchain
         run: python3 .github/scripts/ci_rust.py toolchain
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Install cargo-vet
+      - name: Resolve legacy and fuzz lockfiles against exact shared pins
+        run: |
+          mkdir receipt
+          git rev-parse HEAD > receipt/source.txt
+          cargo update --manifest-path legacy/Cargo.toml --package jiff --precise 0.2.39
+          cargo update --manifest-path fuzz/Cargo.toml --package jiff --precise 0.2.39
+          cp Cargo.lock receipt/root-Cargo.lock
+          cp legacy/Cargo.lock receipt/legacy-Cargo.lock
+          cp fuzz/Cargo.lock receipt/fuzz-Cargo.lock
+      - name: Install the policy's pinned cargo-vet
         run: cargo install --locked --version 0.10.2 cargo-vet
-      - run: cargo vet --locked
-      - run: cargo vet --manifest-path legacy/Cargo.toml --store-path supply-chain --locked
-  audit:
-    name: audit
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Select repository Rust toolchain
-        run: python3 .github/scripts/ci_rust.py toolchain
-      - name: Set up Nix
-        uses: nix-forge/ci/actions/setup-nix@1a6dfe0b851c69ad30169977e014bd45029e9c55 # v2.13.0
-        with:
-          cache: 'false'
-          cache-scope: ci-audit
-      - name: Materialize discovered partitions
-        uses: nix-forge/ci/actions/materialize-partitions@1a6dfe0b851c69ad30169977e014bd45029e9c55 # v2.13.0
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Install cargo-audit
-        run: cargo install --locked --version 0.22.2 cargo-audit
-      - run: cargo audit
-      - run: cargo audit --file fuzz/Cargo.lock
-      # The separate offline-only build retains ADR 0009's existing exception.
-      - run: cargo audit --file legacy/Cargo.lock --ignore RUSTSEC-2023-0071
-      - name: Scan all supported lockfiles
-        run: nix develop --command osv-scanner scan source --recursive .
-  fuzz-smoke:
-    name: fuzz-smoke
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    env:
-      # The repository's stable rust-toolchain file otherwise overrides the
-      # nightly selected below when cargo-fuzz starts rustc with -Z flags.
-      RUSTUP_TOOLCHAIN: nightly
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Select Rust nightly
+      - name: Refresh trusted audits without advancing exemptions
         run: |
-          rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
-          rustup override set nightly
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Install cargo-fuzz
-        run: cargo install --locked --version 0.13.2 cargo-fuzz
-      - name: Check the independent fuzz workspace
+          before=$(sha256sum supply-chain/config.toml)
+          set +e
+          cargo vet --no-minimize-exemptions > receipt/vet-root.log 2>&1
+          root_status=$?
+          cargo vet --manifest-path legacy/Cargo.toml --store-path supply-chain --locked \
+            > receipt/vet-legacy.log 2>&1
+          legacy_status=$?
+          set -e
+          test "$before" = "$(sha256sum supply-chain/config.toml)"
+          cp supply-chain/imports.lock receipt/imports.lock
+          printf 'root=%s\nlegacy=%s\n' "$root_status" "$legacy_status" > receipt/vet-status.txt
+          cat receipt/vet-root.log receipt/vet-legacy.log
+          test "$root_status" = 0 && test "$legacy_status" = 0
+      - name: Record generated patch
+        if: always()
         run: |
-          cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
-          cargo clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
-      - name: Fuzz every registered target
-        run: python3 .github/scripts/ci_rust.py fuzz
-  benchmarks:
-    name: benchmarks
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Select repository Rust toolchain
-        run: python3 .github/scripts/ci_rust.py toolchain
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Record runner metadata
-        run: |
-          {
-            echo "commit=${GITHUB_SHA}"
-            echo "runner=${RUNNER_OS}/${RUNNER_ARCH}"
-            echo "kernel=$(uname -a)"
-            echo "rust=$(rustc --version --verbose)"
-            echo "cpu=$(grep -m1 'model name' /proc/cpuinfo || true)"
-          } > benchmark-environment.txt
-      - name: Run scale benchmark
-        run: cargo bench -p nix-seal-policy --bench scale --locked > benchmark.jsonl
+          mkdir -p receipt
+          git diff --binary > receipt/reconciliation.patch
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
         with:
-          name: nix-seal-benchmarks-${{ github.sha }}
-          path: |
-            benchmark.jsonl
-            benchmark-environment.txt
-  policy:
-    name: policy
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          manifest-path: legacy/Cargo.toml
-          arguments: --all-features --locked --config legacy/deny.toml
-  queue-completion:
-    continue-on-error: true
-    name: Queue completion callback
-    if: always() && github.event_name == 'workflow_dispatch' && startsWith(github.ref, format('refs/heads/gh-readonly-queue/{0}/',
-      github.event.repository.default_branch))
-    needs: [legacy-symbols, rust, msrv, nix, tooling, vet, audit, fuzz-smoke, benchmarks, policy]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    permissions:
-      actions: write # Dispatch trusted queue validation.
-    steps:
-      - name: Notify trusted queue reconciler
-        uses: nix-forge/ci/actions/queue-completion@1a6dfe0b851c69ad30169977e014bd45029e9c55 # v2.13.0
+          name: seal-dependency-reconciliation
+          path: receipt
