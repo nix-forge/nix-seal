@@ -24,11 +24,16 @@ jobs:
         run: |
           mkdir receipt
           git rev-parse HEAD > receipt/source.txt
-          cargo update --manifest-path legacy/Cargo.toml --package jiff --precise 0.2.39
-          cargo update --manifest-path fuzz/Cargo.toml --package jiff --precise 0.2.39
+          cargo update --package sha2@0.11.1 --precise 0.11.0
+          cargo update --manifest-path legacy/Cargo.toml --package sha2@0.11.1 --precise 0.11.0
+          cargo update --manifest-path fuzz/Cargo.toml --package sha2@0.11.1 --precise 0.11.0
+          cargo update --manifest-path legacy/Cargo.toml --package jiff-core --precise 0.1.4
+          cargo update --manifest-path fuzz/Cargo.toml --package jiff-core --precise 0.1.4
           cp Cargo.lock receipt/root-Cargo.lock
           cp legacy/Cargo.lock receipt/legacy-Cargo.lock
           cp fuzz/Cargo.lock receipt/fuzz-Cargo.lock
+      - name: Exercise independent hash boundary vectors against the reviewed backend
+        run: cargo test --package nix-seal-crypto --test sha2_backend_vectors --locked
       - name: Install the policy's pinned cargo-vet
         run: cargo install --locked --version 0.10.2 cargo-vet
       - name: Refresh trusted audits without advancing exemptions
