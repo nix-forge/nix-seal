@@ -677,7 +677,7 @@ checksum = "6ebaa1a2bf1290ab3bfe5a7b771d050ebffab2711c19a81691c683a5144a25de"
 dependencies = [
  "curve25519-dalek 5.0.0",
  "ed25519 3.0.0",
- "sha2 0.11.1",
+ "sha2 0.11.0",
  "subtle",
  "zeroize",
 ]
@@ -1118,9 +1118,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-core"
-version = "0.1.5"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffe6854081f5ac0a3046a9b223729ccd7a20b1e0e8277e44dc0660eedf67dfe2"
+checksum = "77a24020db0ee88d1c681d677681bd31f9f4ea189a455425223d52ce4f1508aa"
 dependencies = [
  "log",
 ]
@@ -1289,7 +1289,7 @@ dependencies = [
  "serde",
  "serde_jcs",
  "serde_json",
- "sha2 0.11.1",
+ "sha2 0.11.0",
  "tempfile",
  "toml 1.1.8+spec-1.1.0",
  "uzers",
@@ -1344,7 +1344,7 @@ dependencies = [
  "rustix",
  "secrecy",
  "serde_json",
- "sha2 0.11.1",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
 ]
@@ -1760,7 +1760,7 @@ version = "8.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42ffa149f6aa81b58a5b3011d01a857c4ed12c7a732d2c51947a4c7c692185f0"
 dependencies = [
- "sha2 0.11.1",
+ "sha2 0.11.0",
  "walkdir",
 ]
 
@@ -1978,9 +1978,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.11.1"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
+checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
