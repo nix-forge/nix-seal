@@ -222,3 +222,69 @@ who = "Codex review for nix-forge"
 criteria = "safe-to-deploy"
 delta = "1.9.0 -> 1.9.1"
 notes = "Reviewed published crate archives against Cargo.lock checksums. Zeroizing Debug becomes opaque rather than exposing its wrapped value. Generic Vec<T> wiping now calls T::zeroize on initialized elements and wipes spare capacity before clear, rather than raw-wiping every former element representation. The consumed byte buffers remain cleared; this does not guarantee complete erasure of arbitrary element representations or prior reallocations. Existing volatile writes and allocation bounds remain. Internal optimization_barrier calls are removed; the public fallback reads MaybeUninit<u8> to avoid treating potentially uninitialized bytes as initialized u8. SIMD paths retain volatile writes. Allocator tests identify the actual registered pointer. Dependencies, features, build behavior, MSRV, and licensing are unchanged; no I/O capability is added. This is a source-delta deployment review, not an independent cryptographic audit."
+
+[[audits.jiff]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "0.2.38 -> 0.2.39"
+notes = "AI-assisted review of published archives verified against Cargo.lock SHA256 checksums. Reviewed checked duration carries, fractional arithmetic, Serde null handling, zero spans, DST arithmetic, formatting-buffer bounds, lazy IANA names and Windows mapping changes. Additions are checked or bounded; no new build script, unsafe block or external execution capability. Selected std usage excludes default timezone-database features. Native and security qualification is recorded separately."
+
+[[audits.jiff-core]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "0.1.0 -> 0.1.4"
+notes = "AI-assisted review of published archives verified against Cargo.lock SHA256 checksums. Reviewed timestamp range checks before integer casts, i64 offset subtraction, negative fractional normalization, TZif conversion and constructor-bounded time extraction. Optional arbitrary implementations are absent from the resolved graph. Native and security qualification is recorded separately."
+
+[[audits.jiff-static]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "0.2.38 -> 0.2.39"
+notes = "AI-assisted review of published archives verified against Cargo.lock SHA256 checksums. Production proc-macro source and embedded data are unchanged. The jiff-core minimum becomes 0.1.2; the selected 0.1.4 delta is separately reviewed. Remaining changes are metadata and development lockfile. Native and security qualification is recorded separately."
+
+[[audits.rustix]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.5 -> 1.1.6"
+notes = "AI-assisted review of published archives verified against Cargo.lock SHA256 checksums. Reviewed syscall/ABI, padding, xattr, ancillary-buffer, termios and platform changes against nix-seal usage. Changes repair OS interfaces; no introduced defect, new capability, build-script change or incompatible direct call site identified on supported x86_64/aarch64 Linux/Darwin. MSRV 1.65 remains supported; native ownership, symlink and terminal gates remain required. Native and security qualification is recorded separately."
+
+[[audits.schemars]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.2.2 -> 1.2.3"
+notes = "AI-assisted review of published archives verified against Cargo.lock SHA256 checksums. Reviewed authoritative internal enum-tag ordering and duplicate-key filtering. Invalid arbitrary-precision schemas now return errors instead of an unreachable panic. Remaining changes are qualification/lint cleanup, with no new unsafe code or build script. Native and security qualification is recorded separately."
+
+[[audits.schemars_derive]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.2.2 -> 1.2.3"
+notes = "AI-assisted review of published archives verified against Cargo.lock SHA256 checksums. Reviewed generated identifier/import qualification and lint allowances. Schema behavior otherwise remains unchanged; no new dependency, build script, unsafe code or execution capability. Native and security qualification is recorded separately."
+
+[[audits.serde_json]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.0.151 -> 1.0.154"
+notes = "AI-assisted review of published archives verified against Cargo.lock SHA256 checksums. Reviewed UTF-8 error positions, negative zero, finite f32 conversion, lexical constants and map hasher selection. The selected std path retains BTreeMap/RandomState behavior; the weaker no_std Foldhash path and optional dependency are absent. Build script unchanged; signed canonicalization still uses serde_jcs. Native and security qualification is recorded separately."
+
+[[audits.serde_spanned]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.2 -> 1.1.3"
+notes = "AI-assisted review of published archives verified against Cargo.lock SHA256 checksums. Only runtime change adds an exact optional-map size hint bounded to 0..3. Parsing, span interpretation, dependencies and capabilities are unchanged. Native and security qualification is recorded separately."
+
+[[audits.toml]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.8+spec-1.1.0 -> 1.2.1+spec-1.1.0"
+notes = "AI-assisted review of published archives verified against Cargo.lock SHA256 checksums. Reviewed serializer/buffer restructuring, allocation reuse, map entries, None-key validation and size hints. Deferred UTF-8 offsets are string-length-derived and applied in reverse; stable creation positions preserve table order. Parser grammar unchanged. No general complexity bound claimed for pathological nesting; deployed authoring uses validated public plans and retains lifecycle/round-trip tests. Native and security qualification is recorded separately."
+
+[[audits.toml_datetime]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.2+spec-1.1.0 -> 1.1.3+spec-1.1.0"
+notes = "AI-assisted review of published archives verified against Cargo.lock SHA256 checksums. Only runtime change adds an exact 0..1 map size hint. Date parsing, representation, dependencies and capabilities remain unchanged. Native and security qualification is recorded separately."
+
+[[audits.toml_writer]]
+who = "Codex review for nix-forge"
+criteria = "safe-to-deploy"
+delta = "1.1.3+spec-1.1.0 -> 1.2.0+spec-1.1.0"
+notes = "AI-assisted review of published archives verified against Cargo.lock SHA256 checksums. Reviewed private ASCII-subset fast path and equivalent literal punctuation/float writes. Escape bypass excludes quotes, backslashes, controls, newlines and non-ASCII; keys retain escaping. No new dependency or capability. Native and security qualification is recorded separately."
