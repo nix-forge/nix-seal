@@ -1,5 +1,5 @@
 //! Independent SHA-2 known-answer and incremental boundary vectors.
-//! Expected bytes use CPython hashlib/OpenSSL, independently of RustCrypto.
+//! Expected bytes use `CPython` hashlib/OpenSSL, independently of `RustCrypto`.
 //! Empty and abc also match the published NIST known answers.
 
 use sha2::{Digest, Sha256, Sha512};
@@ -63,7 +63,7 @@ fn published_short_known_answers() {
 }
 
 #[test]
-fn padding_and_multiblock_boundaries() {
+fn sha256_padding_and_multiblock_boundaries() {
     for (length, expected) in [
         (
             55,
@@ -132,6 +132,10 @@ fn padding_and_multiblock_boundaries() {
     ] {
         sha256_case(&vec![b'a'; length], expected);
     }
+}
+
+#[test]
+fn sha512_padding_and_multiblock_boundaries() {
     for (length, expected) in [
         (
             111,
