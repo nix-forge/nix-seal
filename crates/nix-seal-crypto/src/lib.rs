@@ -1372,7 +1372,7 @@ QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB\n\
             if accepted {
                 assert_eq!(output, b"mixed-recipient-secret");
             } else {
-                assert!(output.is_empty());
+                assert!(output.is_empty(), "rejected operation produced output");
             }
         }
         Ok(())

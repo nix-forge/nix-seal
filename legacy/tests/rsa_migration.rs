@@ -51,9 +51,9 @@ fn normal_operations_reject_rsa(
         )
         .is_err()
     );
-    assert!(output.is_empty());
+    assert!(output.is_empty(), "rejected operation produced output");
     assert!(nix_seal_crypto::decrypt(ciphertext, &mut output, &identity).is_err());
-    assert!(output.is_empty());
+    assert!(output.is_empty(), "rejected operation produced output");
     assert!(
         nix_seal_crypto::rekey(
             ciphertext,
@@ -63,7 +63,7 @@ fn normal_operations_reject_rsa(
         )
         .is_err()
     );
-    assert!(output.is_empty());
+    assert!(output.is_empty(), "rejected operation produced output");
     assert!(
         nix_seal_crypto::rekey_migration(
             ciphertext,
@@ -73,7 +73,7 @@ fn normal_operations_reject_rsa(
         )
         .is_err()
     );
-    assert!(output.is_empty());
+    assert!(output.is_empty(), "rejected operation produced output");
     Ok(())
 }
 

@@ -20,7 +20,10 @@ fn age_localization_config_and_manifest() -> Result<(), Box<dyn Error>> {
     assert_eq!(configuration.name, "localization-fixture");
     let configuration = configuration.config_or_err()?;
     assert_eq!(configuration.fallback_language.to_string(), "en-US");
-    assert!(configuration.subcrates.is_empty());
+    assert!(
+        configuration.subcrates.is_empty(),
+        "localization must use the root crate only"
+    );
     assert_eq!(
         configuration
             .fluent

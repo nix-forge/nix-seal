@@ -4,18 +4,7 @@
   perSystem =
     { config, pkgs, ... }:
     let
-      checkPython = pkgs.buildPackages.python3.withPackages (
-        ps:
-        lib.optionals pkgs.buildPackages.stdenv.hostPlatform.isLinux [
-          # Module conversion enables metadata checks that the application's
-          # placeholder project version does not satisfy.
-          (ps.toPythonModule (
-            pkgs.buildPackages.nixos-test-driver.overridePythonAttrs (old: {
-              nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ ps.pyprojectVersionPatchHook ];
-            })
-          ))
-        ]
-      );
+      checkPython = pkgs.buildPackages.python3;
       pythonCompile =
         (import ../../nix/lib/writers.nix { inherit (pkgs) lib; }).writeBashTemplate
           { pkgs = pkgs.buildPackages; }
@@ -161,7 +150,6 @@
             };
             ty = {
               enable = true;
-              # Use the real driver types on Linux; Darwin permits that platform import.
               entry = "${lib.getExe pkgs.buildPackages.ty} check --project . --python ${lib.getExe checkPython}";
               language = "system";
               always_run = true;

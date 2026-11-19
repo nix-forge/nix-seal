@@ -126,7 +126,10 @@ fn dry_run_then_prepare_transfer_and_retry() -> TestResult {
     let cache = fixture.temporary.path().join("administrator-cache");
     let dry = prepare_request(&request, &fixture.arguments(false), &cache)?;
     assert!(!dry.prepared);
-    assert!(dry.bundle.artifacts.is_empty());
+    assert!(
+        dry.bundle.artifacts.is_empty(),
+        "dry preparation produced artifacts"
+    );
     assert!(
         !cache.exists(),
         "dry run must not create an administrator cache"

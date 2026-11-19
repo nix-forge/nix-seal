@@ -105,7 +105,10 @@ fn plan_directed_create_rotate_and_reveal() -> Result<(), Box<dyn std::error::Er
         ],
     )?;
     assert!(!forbidden_json.status.success());
-    assert!(forbidden_json.stdout.is_empty());
+    assert!(
+        forbidden_json.stdout.is_empty(),
+        "rejected operation produced JSON"
+    );
     Ok(())
 }
 
@@ -516,7 +519,10 @@ fn private_yaml_parse_errors_do_not_reach_cli_diagnostics() -> Result<(), Box<dy
             }
             let output = run_with_stdin(&fixture.root, &arguments, input.as_bytes())?;
             assert!(!output.status.success());
-            assert!(output.stdout.is_empty());
+            assert!(
+                output.stdout.is_empty(),
+                "rejected operation produced output"
+            );
             assert_eq!(
                 String::from_utf8(output.stderr)?,
                 format!("nix-seal: {message}\n")
@@ -573,7 +579,9 @@ fn production_generator_worker_emits_a_bounded_isolation_status()
     for directory in [&workspace, &outputs, &public_outputs, &prompts, &secrets] {
         std::fs::create_dir(directory)?;
     }
-    let output = Command::new(env!("CARGO_BIN_EXE_nix-seal"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_nix-seal"));
+    command
+        .current_dir(temporary.path())
         .arg("__generator-worker")
         .arg("--executable")
         .arg(env!("CARGO_BIN_EXE_nix-seal"))
@@ -596,8 +604,12 @@ fn production_generator_worker_emits_a_bounded_isolation_status()
         .arg("--public-output-count")
         .arg("0")
         .env_clear()
-        .env("NIX_SEAL_GENERATOR_WORKER", "1")
-        .output()?;
+        .env("NIX_SEAL_GENERATOR_WORKER", "1");
+    // Keep instrumented test output in the coverage runner's directory.
+    if let Some(profile_file) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile_file);
+    }
+    let output = command.output()?;
     let magic = b"nix-seal-generator-worker-v1\n";
     assert!(output.stdout.starts_with(magic));
     assert_eq!(output.stdout.len(), magic.len() + 1);

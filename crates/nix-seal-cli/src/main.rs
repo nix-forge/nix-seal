@@ -6,6 +6,9 @@ mod linux_runtime;
 mod migration;
 mod preparation;
 mod readiness;
+mod schema;
+
+use schema::{SchemaKind, run_schema};
 
 // Migration unit tests remain in this crate while command extraction proceeds;
 // keep the transitional test-only import scoped to this crate root.
@@ -965,16 +968,6 @@ enum CompletionShell {
     Nushell,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
-enum SchemaKind {
-    Plan,
-    TargetPolicy,
-    SecretArtifactPolicy,
-    SecretRecipients,
-    Activation,
-    Collection,
-}
-
 fn main() {
     if let Err(error) = harden_process() {
         eprintln!("nix-seal: warning: could not fully disable process core dumps: {error}");
@@ -1438,24 +1431,6 @@ fn run_doctor(
         );
     }
 
-    Ok(())
-}
-
-fn run_schema(kind: SchemaKind) -> Result<()> {
-    println!(
-        "{}",
-        match kind {
-            SchemaKind::Plan => nix_seal_policy::json_schema()?,
-            SchemaKind::TargetPolicy => nix_seal_policy::target_policy_json_schema()?,
-            SchemaKind::SecretArtifactPolicy => {
-                nix_seal_policy::secret_artifact_policy_json_schema()?
-            }
-            SchemaKind::SecretRecipients => nix_seal_policy::secret_recipients_json_schema()?,
-            SchemaKind::Activation => nix_seal_runtime::activation_json_schema()?,
-            SchemaKind::Collection =>
-                include_str!("../../../schemas/collection-v1.schema.json").to_owned(),
-        }
-    );
     Ok(())
 }
 
@@ -8446,7 +8421,10 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
             &mut plaintext,
             &identity,
         )?;
-        assert!(plaintext.is_empty());
+        assert!(
+            plaintext.is_empty(),
+            "rejected operation produced plaintext"
+        );
         Ok(())
     }
 
@@ -9191,8 +9169,11 @@ ZfG1KaT0PtFDJ/XFSqtiAAAAEHVzZXJAZXhhbXBsZS5jb20BAgMEBQ==\n\
         run_init(&config, true)?;
         let plan = nix_seal_policy::load_toml(&config)?;
         nix_seal_policy::validate(&plan)?;
-        assert!(plan.identities.is_empty());
-        assert!(plan.secrets.is_empty());
+        assert!(
+            plan.identities.is_empty(),
+            "the plan must have no identities"
+        );
+        assert!(plan.secrets.is_empty(), "the plan must have no secrets");
         assert!(run_init(&config, false).is_err());
         assert!(run_init(&temporary.path().join("nix-seal.json"), false).is_err());
         Ok(())

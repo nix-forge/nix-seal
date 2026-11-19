@@ -28,8 +28,7 @@ and a random secret inside private temporary directories. They exercise:
 These are unprivileged CLI integration tests using isolated persistent runtime
 directories. They do not mount the platform's volatile storage, restore an
 actual offline identity backup, run a service, or replace the independent audit.
-Record native platform and operational recovery results separately. The runtime
-VM and platform checks remain necessary for boot and service integration.
+Record native platform and operational recovery results separately. Boot and service integration require separate native operational validation.
 
 ## First-time canonical ciphertext creation
 

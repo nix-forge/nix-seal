@@ -30,6 +30,11 @@ still uses HPKE's allocation-only surface,
 without its P-256 feature. The unused upstream tagpq test-vector asset is retained
 unchanged. The upstream development lockfile is removed.
 
+The localization wrappers resolve the loader before invoking `i18n_embed_fl`
+and forward the argument tokens for its parser. This preserves Fluent's
+compile-time validation and avoids the analyzer's false macro diagnostics.
+[rust-analyzer issue #23502](https://github.com/rust-lang/rust-analyzer/issues/23502)
+
 This removes the affected `crypto-bigint` dependency and isolates RSA without
 changing working cryptographic primitives. It does not repair the RSA timing
 advisory; its exception is retained only in the independently built legacy

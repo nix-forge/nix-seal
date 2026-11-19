@@ -20,8 +20,9 @@ version. Times are wall-clock milliseconds and are not portable latency claims.
 Compare runs only when recording the runner image, CPU model, memory, Rust
 toolchain, and repository commit alongside the JSON output.
 
-The CI benchmark job publishes the raw JSONL and runner metadata as an artifact
-for every push and pull request. Release notes must link the artifact and state
-the hardware and toolchain before making a performance claim. A statistically
+The benchmark is an optional local measurement, outside the required CI check
+set. Save runner metadata alongside any measurements you intend to compare.
+Release notes must link reviewed measurements and state the hardware and
+toolchain before making a performance claim. A statistically
 significant regression threshold is a release-policy decision; no threshold is
 silently encoded in this smoke benchmark.

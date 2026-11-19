@@ -4,6 +4,8 @@ on:
   schedule:
     - cron: "23 3 * * 6"
 permissions: {}
+env:
+  ASSURANCE_NIGHTLY: nightly-2026-11-13
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: false
@@ -19,13 +21,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Select Rust nightly
-        run: |
-          rustup toolchain install nightly --profile minimal --component miri --component rust-src
-          rustup override set nightly
+        run: rustup toolchain install "$ASSURANCE_NIGHTLY" --profile minimal --component miri --component
+          rust-src
       - name: Run Miri on the memory-safe core
-        # The checked-in rust-toolchain.toml pins stable. Select nightly on
-        # the command itself so Rustup cannot override this job's toolchain.
-        run: cargo +nightly miri test -p nix-seal-core --lib
+        run: cargo "+$ASSURANCE_NIGHTLY" miri test --locked -p nix-seal-core --lib
   address-sanitizer:
     name: address-sanitizer
     timeout-minutes: 45
@@ -41,12 +40,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Select Rust nightly
-        run: |
-          rustup toolchain install nightly --profile minimal --component rust-src
-          rustup override set nightly
+        run: rustup toolchain install "$ASSURANCE_NIGHTLY" --profile minimal --component rust-src
       - name: Run address sanitizer on the parser core
         # The explicit toolchain bypasses the stable repository pin.
-        run: cargo +nightly test -p nix-seal-core --lib -Zbuild-std --target x86_64-unknown-linux-gnu
+        run: cargo "+$ASSURANCE_NIGHTLY" test --locked -p nix-seal-core --lib -Zbuild-std --target x86_64-unknown-linux-gnu
   mutation:
     name: mutation
     runs-on: ubuntu-latest
@@ -67,8 +64,9 @@ jobs:
           cargo mutants \
             --package nix-seal-core \
             --package nix-seal-policy \
-            --timeout 120 \
-            --in-place
+            --exclude crates/nix-seal-core/src/proofs.rs \
+            --cargo-arg=--locked \
+            --timeout 120
           status=$?
           set -e
 

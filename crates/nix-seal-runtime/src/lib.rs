@@ -1561,11 +1561,12 @@ where
             visitor(TemplatePart::Placeholder(placeholder))?;
             literal_start = end.checked_add(2).ok_or(RuntimeError::Limit)?;
             search_start = literal_start;
-        } else if remainder.starts_with("{{nix-seal") {
-            return Err(RuntimeError::TemplateSyntax);
-        } else {
-            search_start = start.checked_add(2).ok_or(RuntimeError::Limit)?;
+            continue;
         }
+        if remainder.starts_with("{{nix-seal") {
+            return Err(RuntimeError::TemplateSyntax);
+        }
+        search_start = start.checked_add(2).ok_or(RuntimeError::Limit)?;
     }
     visitor(TemplatePart::Literal(&source.as_bytes()[literal_start..]))?;
     if used.len() != placeholders.len()

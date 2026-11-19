@@ -1,0 +1,2 @@
+# libFuzzer is linked only by the standalone fuzz targets.
+exceptions = [{ crate = "libfuzzer-sys@0.4.13", allow = ["NCSA"] }]

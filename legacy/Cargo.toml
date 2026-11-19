@@ -12,6 +12,10 @@ name = "nix-seal-legacy"
 path = "../crates/nix-seal-cli/src/main.rs"
 test = false
 
+[package.metadata.cargo-machete]
+# The dependency enables ssh-rsa for the age crate used by the shared CLI.
+ignored = ["age"]
+
 [workspace]
 resolver = "2"
 

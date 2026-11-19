@@ -243,12 +243,12 @@ impl RecipientsAccumulator {
         self.recipients.push(recipient);
     }
 
-    #[cfg(feature = "plugin")]
+    #[cfg(all(feature = "plugin", feature = "cli-common"))]
     pub(crate) fn push_plugin(&mut self, recipient: plugin::Recipient) {
         self.plugin_recipients.push(recipient);
     }
 
-    #[cfg(feature = "armor")]
+    #[cfg(all(feature = "armor", feature = "cli-common"))]
     pub(crate) fn extend(
         &mut self,
         iter: impl IntoIterator<Item = Box<dyn crate::Recipient + Send>>,
