@@ -9,6 +9,22 @@ concurrency:
   group: "${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}"
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  legacy-symbols:
+    name: legacy-symbols
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Reject removed manager symbols and runtime references
+        run: |
+          if git grep -nEi 'secret[c]tl|secret[I]ndex|config[.]age[.]secrets|inputs[.]agenix'; then
+            echo 'removed secret-manager symbols or agenix runtime references found' >&2
+            exit 1
+          fi
   rust:
     name: rust
     strategy:
@@ -236,7 +252,7 @@ jobs:
     name: Queue completion callback
     if: always() && github.event_name == 'workflow_dispatch' && startsWith(github.ref, format('refs/heads/gh-readonly-queue/{0}/',
       github.event.repository.default_branch))
-    needs: [rust, msrv, nix, tooling, vet, audit, fuzz-smoke, benchmarks, policy]
+    needs: [legacy-symbols, rust, msrv, nix, tooling, vet, audit, fuzz-smoke, benchmarks, policy]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:
