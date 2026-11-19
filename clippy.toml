@@ -1,0 +1,2 @@
+# Keep Clippy's suggestions compatible with the supported compiler floor.
+msrv = "1.93.0"

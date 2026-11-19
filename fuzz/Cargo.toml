@@ -2,6 +2,7 @@
 name = "nix-seal-fuzz"
 version = "0.0.0"
 publish = false
+license = "MIT OR Apache-2.0"
 edition = "2024"
 
 [package.metadata]
@@ -9,12 +10,12 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.12"
-nix-seal-core = { path = "../crates/nix-seal-core" }
-nix-seal-cache = { path = "../crates/nix-seal-cache" }
-nix-seal-crypto = { path = "../crates/nix-seal-crypto" }
-nix-seal-manifest = { path = "../crates/nix-seal-manifest" }
-nix-seal-policy = { path = "../crates/nix-seal-policy" }
-nix-seal-runtime = { path = "../crates/nix-seal-runtime" }
+nix-seal-core = { path = "../crates/nix-seal-core", version = "=0.1.0-alpha.1" }
+nix-seal-cache = { path = "../crates/nix-seal-cache", version = "=0.1.0-alpha.1" }
+nix-seal-crypto = { path = "../crates/nix-seal-crypto", version = "=0.1.0-alpha.1" }
+nix-seal-manifest = { path = "../crates/nix-seal-manifest", version = "=0.1.0-alpha.1" }
+nix-seal-policy = { path = "../crates/nix-seal-policy", version = "=0.1.0-alpha.1" }
+nix-seal-runtime = { path = "../crates/nix-seal-runtime", version = "=0.1.0-alpha.1" }
 secrecy = "0.10"
 serde_json = "1.0"
 tempfile = "3"

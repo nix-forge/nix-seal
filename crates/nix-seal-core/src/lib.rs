@@ -27,15 +27,13 @@ impl Id {
     /// Parses and validates an `ID`.
     pub fn parse(value: impl Into<String>) -> Result<Self, IdError> {
         let value = value.into();
-        if value.is_empty() || value.starts_with('/') || value.contains("..") {
+        if value.contains("..") {
             return Err(IdError::Invalid(value));
         }
         if value
             .split('/')
             .any(|segment| segment.is_empty() || segment == ".")
-            || !value.chars().all(|c| {
-                c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '/' | '-' | '_')
-            })
+            || !value.bytes().all(is_id_byte)
         {
             return Err(IdError::Invalid(value));
         }
@@ -47,6 +45,10 @@ impl Id {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+fn is_id_byte(byte: u8) -> bool {
+    byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'/' | b'-' | b'_')
 }
 
 impl fmt::Display for Id {
@@ -371,8 +373,7 @@ impl Default for RuntimeSettings {
 /// the selected runtime root and the actual filesystem ancestry.
 #[must_use]
 pub fn valid_compatibility_symlink(value: &str) -> bool {
-    if value.is_empty()
-        || value.len() > 4096
+    if value.len() > 4096
         || !value.starts_with('/')
         || value.ends_with('/')
         || value.chars().any(char::is_control)
@@ -380,8 +381,7 @@ pub fn valid_compatibility_symlink(value: &str) -> bool {
         return false;
     }
     let path = Path::new(value);
-    if path == Path::new("/")
-        || path.file_name().is_none()
+    if path.file_name().is_none()
         || !value
             .split('/')
             .skip(1)
@@ -573,11 +573,16 @@ pub enum BackendKind {
 mod tests {
     use super::*;
     #[test]
-    fn ids_follow_public_grammar() {
+    fn ids_follow_public_grammar() -> Result<(), IdError> {
         for bad in ["", "/root", "a/../b", "a//b", ".", "a/./b", "Upper", "a b"] {
             assert!(Id::parse(bad).is_err());
         }
-        assert!(Id::parse("prod/db-password_v2").is_ok());
+        let spelling = "prod/db.password-v2_1";
+        let id = Id::parse(spelling)?;
+        assert_eq!(id.as_str(), spelling);
+        assert_eq!(id.to_string(), spelling);
+        assert!(Id::parse("prod/db..password").is_err());
+        Ok(())
     }
 
     #[test]
@@ -585,6 +590,14 @@ mod tests {
         for valid in ["/run/app/token", "/var/lib/nix-seal/legacy/db"] {
             assert!(valid_compatibility_symlink(valid), "{valid}");
         }
+        assert!(valid_compatibility_symlink(&format!(
+            "/{}",
+            "x".repeat(4095)
+        )));
+        assert!(!valid_compatibility_symlink(&format!(
+            "/{}",
+            "x".repeat(4096)
+        )));
         for invalid in [
             "",
             "/",
@@ -592,10 +605,45 @@ mod tests {
             "/run/../etc/token",
             "/run/./token",
             "/run/token/",
+            "/run/token/.",
+            "/run/token/..",
             "/run/nix\u{7f}seal/token",
             "/run/nix\u{0085}seal/token",
         ] {
             assert!(!valid_compatibility_symlink(invalid), "{invalid:?}");
         }
     }
+
+    #[test]
+    fn generator_deserialization_uses_documented_limits() -> Result<(), serde_json::Error> {
+        let generator: Generator = serde_json::from_str(r#"{"executable":"random","outputs":[]}"#)?;
+        assert_eq!(generator.timeout_seconds, 30);
+        assert_eq!(generator.max_output_bytes, 67_108_864);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_override_replaces_the_default_only_for_its_target()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let secret: Secret = serde_json::from_str(
+            r#"{
+                "source":"example.age",
+                "sourceCiphertextHash":"",
+                "runtime":{"owner":"default-user","group":"default-group","mode":"0440"},
+                "runtimeOverrides":{"target-a":{"owner":"override-user","group":"override-group","mode":"0400"}}
+            }"#,
+        )?;
+        assert_eq!(
+            secret.runtime_for_target(&Id::parse("target-a")?).owner,
+            "override-user"
+        );
+        assert_eq!(
+            secret.runtime_for_target(&Id::parse("target-b")?).owner,
+            "default-user"
+        );
+        Ok(())
+    }
 }
+
+#[cfg(kani)]
+mod proofs;

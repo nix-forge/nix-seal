@@ -17,7 +17,6 @@ members = [
 version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.93"
-authors = ["Ian Hollow"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nix-forge/nix-seal"
 
@@ -82,6 +81,7 @@ x25519-dalek = { version = "=3.0.0", default-features = false, features = [
 ] }
 
 [workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
 unsafe_code = "forbid"
 missing_docs = "warn"
 

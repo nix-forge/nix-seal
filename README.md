@@ -22,8 +22,7 @@ templates; named options handle exceptions. Templates accept public text or file
 advanced mappings, ownership, phases, and service actions remain available.
 
 The scale benchmark and its reporting protocol are documented in
-[`docs/benchmarks.md`](docs/benchmarks.md). CI publishes raw, machine-readable
-benchmark output with runner metadata; timing numbers are never presented as
+[`docs/benchmarks.md`](docs/benchmarks.md). The benchmark is an optional local command; timing numbers are never presented as
 environment-independent claims.
 
 Release build, SBOM, checksum, and OIDC attestation controls are documented in

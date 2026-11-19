@@ -25,12 +25,16 @@ lazy_static! {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! fl {
+    // Resolve the hygienic crate path outside the procedural macro and let it
+    // parse the original argument tokens. This also works in rust-analyzer.
     ($message_id:literal) => {{
-        i18n_embed_fl::fl!($crate::i18n::LANGUAGE_LOADER, $message_id)
+        let loader = &$crate::i18n::LANGUAGE_LOADER;
+        i18n_embed_fl::fl!(loader, $message_id)
     }};
 
-    ($message_id:literal, $($args:expr),* $(,)?) => {{
-        i18n_embed_fl::fl!($crate::i18n::LANGUAGE_LOADER, $message_id, $($args), *)
+    ($message_id:literal, $($args:tt)*) => {{
+        let loader = &$crate::i18n::LANGUAGE_LOADER;
+        i18n_embed_fl::fl!(loader, $message_id, $($args)*)
     }};
 }
 
@@ -42,8 +46,8 @@ macro_rules! wfl {
         write!($f, "{}", $crate::fl!($message_id))
     };
 
-    ($f:ident, $message_id:literal, $($args:expr),* $(,)?) => {
-        write!($f, "{}", $crate::fl!($message_id, $($args), *))
+    ($f:ident, $message_id:literal, $($args:tt)*) => {
+        write!($f, "{}", $crate::fl!($message_id, $($args)*))
     };
 }
 
@@ -55,8 +59,8 @@ macro_rules! wlnfl {
         writeln!($f, "{}", $crate::fl!($message_id))
     };
 
-    ($f:ident, $message_id:literal, $($args:expr),* $(,)?) => {
-        writeln!($f, "{}", $crate::fl!($message_id, $($args), *))
+    ($f:ident, $message_id:literal, $($args:tt)*) => {
+        writeln!($f, "{}", $crate::fl!($message_id, $($args)*))
     };
 }
 

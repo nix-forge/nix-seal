@@ -2,7 +2,7 @@
 
 Discuss substantial design changes before implementation and add an ADR for any
 change to cryptography, signatures, manifests, cache/store trust, activation,
-plugins, or migration. Changes must include tests, user-facing documentation,
+plugins, or migration. Changes must include relevant library or Rust tests, user-facing documentation,
 and threat-model updates when trust boundaries move.
 
 All commits require Developer Certificate of Origin sign-off:
@@ -18,10 +18,17 @@ listed below before requesting review. CI runs these checks on pull requests
 and merge groups, and protected `main` requires the resulting statuses to
 pass.
 
-Every major behavior, security, interface, or migration change must add or
-update an automated regression test. If an automated test is not practical,
-the pull request must record the reason, the manual evidence, and a follow-up
-plan. Dependency and security findings are handled under the
+Nix behavior tests cover functions in `nix/lib/` only, through nix-unit cases in
+`nix/lib/tests/`. Rust unit, integration, fuzz, Miri and sanitizer tests remain
+supported. Other automation is static formatting, lint, syntax, type, schema,
+documentation and security analysis. Do not add module/VM fixtures, generated
+activation regression tests or Python behavioral suites. Keep module setting
+assertions and production runtime/input validation.
+
+Run `nix build .#checks.x86_64-linux.lib-tests` for the Nix library suite (replace
+the system for another native platform), or `nix-unit --flake '.#libTests'` in the
+development shell. Library tests do not establish boot or service integration.
+Dependency and security findings follow the
 [dependency-management policy](docs/dependency-management.md).
 
 Run `cargo fmt --all -- --check`,
@@ -65,10 +72,8 @@ documentation and Nix-module edits do not invalidate the Rust package source.
 Documentation and module checks retain their own inputs. Update
 `flake/rust-source.nix` when the Rust build gains another input location.
 
-Run `python3 -m unittest discover -s .github/tests` in the development shell to
-check that metadata edits preserve the source hash while code, schemas, Cargo
-inputs and new fixtures change it. A native package build verifies that the
-filtered source still supplies everything needed by the workspace and its tests.
+A native package build verifies that the filtered source supplies the Rust
+workspace and its retained tests.
 
 ## CI inventories
 
@@ -80,8 +85,7 @@ instead of repeating version edits in workflows.
 Fuzz smoke tests run every binary registered in `fuzz/Cargo.toml`, each with the
 same bounded time budget. Adding or removing a target changes CI automatically.
 Python syntax checks cover tracked Python files, and Ruff discovers files from
-the repository root. The type checker retains explicit scope for the runtime
-test DSL and CI scripts.
+the repository root. The type checker covers surviving Python CI helpers.
 
 Portable formatter and hook checks are exposed as `lintChecks` and run in the
 required x86 Linux Nix job. `ciChecks` contains every remaining native check,
@@ -91,16 +95,10 @@ schemas. Ordinary `nix flake check` still builds the complete local check set.
 
 ## Test evidence
 
-Generated activation and readiness checks must execute their shell control flow
-with isolated command adapters. Source-string assertions cannot prove that a
-failed readiness probe prevents switching. The deployment-readiness check tests
-system failure, home failure, and success before exercising the real CLI.
-
-The runtime VM's store scan rejects matches in text and binary regular files,
-including large match sets, and treats traversal or read errors as failures.
-`nix build .#checks.x86_64-linux.store-scan` exercises the scanner using temporary
-random candidates, without building or activating the system. Run the
-`runtime-vm` check to validate its integration with real secret activation.
+Rust recovery tests exercise CLI behavior using disposable state. Module
+assertions validate setting combinations; library tests validate pure helper
+contracts. Neither establishes real boot, mount or service behavior. Record
+native deployment and operational recovery evidence separately.
 
 ## Source filenames
 

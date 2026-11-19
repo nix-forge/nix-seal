@@ -1,11 +1,14 @@
 {
   "format": "nix-seal.vendored-source.v1",
   "modifiedFiles": {
-    "Cargo.toml": "5a2ecdbceb3a5546832c542e3f448f158ec79c92b77d4dde5cbbb8c8f2f8ed4b",
+    "Cargo.toml": "f0c63f13eed18d3da2817c042f60199a4ee0c7d4c6743d93e53ee0aa13d12380",
     "src/cli_common/recipients.rs": "a3b5b00eecc9cab648703dbe7faeec202b840e1f5dd9025d5c68cc05b92b3d28",
     "src/error.rs": "5ed986fc4342816ded5aba016e3d9b89c67c941f0c3a9ef3bff21ad7877de183",
+    "src/i18n.rs": "1037a3b8b77350a503ebd5ba8271ee171b2b9dc51d58af93ff4eac5207b5f965",
+    "src/identity.rs": "e8baa6a2aee850072a094c0bc4d879116184eda5d3e63cb0e4bc05d3d3db2309",
     "src/lib.rs": "38db8a2e9f1a55855c04172233999b1a112ff4c2bbba7e150bfe0420220c5b1b",
     "src/native.rs": "33216aa9943cda61342277b815de4e62ea4d042a6bff3c253d1709fbcf99ef42",
+    "src/plugin.rs": "6af5f0103fbd12feb1365ddc49cc26521b573ade105696a2b9f92597372afd97",
     "src/ssh.rs": "14cdf77ea4d234cb239269c423a0a12fdee871607d0014768a5f975896e6990b",
     "src/ssh/identity.rs": "7c6d94a93823234b1747905790c11fb10236356fdd0378b761f58793b24aa462",
     "src/ssh/recipient.rs": "d20164ff605a7f4eb23918d344983cf867d462fcece8f01e185f2e40aaf2c219"

@@ -54,7 +54,10 @@ fn binary_name(plugin_name: &str) -> String {
     format!("age-plugin-{}", plugin_name)
 }
 
-struct SlowPluginGuard(mpsc::Sender<()>);
+struct SlowPluginGuard {
+    // Dropping the sender disconnects the receiver and cancels the timer.
+    _cancel_on_drop: mpsc::Sender<()>,
+}
 
 impl SlowPluginGuard {
     /// Starts a thread to print out a progress message after 10 seconds if the plugin
@@ -87,7 +90,7 @@ impl SlowPluginGuard {
             }
         });
 
-        SlowPluginGuard(send)
+        Self { _cancel_on_drop: send }
     }
 }
 

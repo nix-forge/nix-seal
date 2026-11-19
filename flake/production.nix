@@ -6,7 +6,7 @@ let
 
   exportSchema = what: valid: {
     version = 1;
-    doc = "Validate the shape of exported ${what}; behavioral checks are in checks.";
+    doc = "Validate the shape of exported ${what}.";
     inventory = output: {
       evalChecks.isAttributeSet = builtins.isAttrs output;
       children = builtins.mapAttrs (_: value: {
@@ -152,38 +152,20 @@ in
         nix-seal = nixSeal;
         nix-seal-legacy = nixSealLegacy;
         inherit documentation;
-        store-scan = import ../nix/tests/store-scan.nix { inherit pkgs; };
-        bootstrap-terminal =
-          pkgs.runCommand "nix-seal-bootstrap-terminal" { nativeBuildInputs = [ pkgs.python3 ]; }
-            (
-              (import ../nix/lib/render-text.nix) ./scripts/check-bootstrap-terminal.sh {
-                nix_tests_scripts_bootstrap_tty_py = ../nix/tests/scripts/bootstrap_tty.py;
-                inherit nixSeal;
-              }
-            );
+        lib-tests = pkgs.runCommand "nix-seal-lib-tests" { nativeBuildInputs = [ pkgs.nix-unit ]; } ''
+          export HOME="$TMPDIR"
+          nix-unit --eval-store "$TMPDIR/eval-store" --expr 'import ${../nix/lib}/tests { lib = import ${inputs.nixpkgs}/lib; }'
+          touch "$out"
+        '';
       }
-      // lib.optionalAttrs (system == "x86_64-linux") { documentation-site = documentationSite; }
-      // import ../nix/tests/bash-writers.nix { inherit pkgs; }
-      // import ../nix/tests/module-evaluation.nix {
-        inherit inputs system pkgs;
-        inherit (inputs) self;
-      }
-      // lib.optionalAttrs (pkgs.stdenv.hostPlatform.isLinux && system == "x86_64-linux") {
-        runtime-mount-vm = import ../nix/tests/runtime-mount-vm.nix {
-          inherit inputs system pkgs;
-          inherit (inputs) self;
-        };
-        runtime-vm = import ../nix/tests/runtime-vm.nix {
-          inherit system pkgs;
-          inherit (inputs) self;
-        };
-      };
+      // lib.optionalAttrs (system == "x86_64-linux") { documentation-site = documentationSite; };
       devShells.docs = pkgs.mkShellNoCC {
         packages = [ (pkgs.python3.withPackages (python: [ python.mkdocs ])) ];
       };
     };
 
   flake = {
+    libTests = import ../nix/lib/tests { inherit lib; };
     schemas = inputs.flake-schemas.exportedSchemas // {
       ciChecks = inputs.flake-schemas.exportedSchemas.checks;
       lintChecks = inputs.flake-schemas.exportedSchemas.checks;
