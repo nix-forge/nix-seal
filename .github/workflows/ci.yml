@@ -186,6 +186,36 @@ jobs:
           cargo clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
       - name: Fuzz every registered target
         run: python3 .github/scripts/ci_rust.py fuzz
+  benchmarks:
+    name: benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select repository Rust toolchain
+        run: python3 .github/scripts/ci_rust.py toolchain
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Record runner metadata
+        run: |
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "runner=${RUNNER_OS}/${RUNNER_ARCH}"
+            echo "kernel=$(uname -a)"
+            echo "rust=$(rustc --version --verbose)"
+            echo "cpu=$(grep -m1 'model name' /proc/cpuinfo || true)"
+          } > benchmark-environment.txt
+      - name: Run scale benchmark
+        run: cargo bench -p nix-seal-policy --bench scale --locked > benchmark.jsonl
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nix-seal-benchmarks-${{ github.sha }}
+          path: |
+            benchmark.jsonl
+            benchmark-environment.txt
   policy:
     name: policy
     runs-on: ubuntu-latest
