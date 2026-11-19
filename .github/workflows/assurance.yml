@@ -21,7 +21,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Select Rust nightly
-        run: rustup toolchain install "$ASSURANCE_NIGHTLY" --profile minimal --component miri --component rust-src
+        run: rustup toolchain install "$ASSURANCE_NIGHTLY" --profile minimal --component miri --component
+          rust-src
       - name: Run Miri on the memory-safe core
         run: cargo "+$ASSURANCE_NIGHTLY" miri test --locked -p nix-seal-core --lib
   address-sanitizer:
